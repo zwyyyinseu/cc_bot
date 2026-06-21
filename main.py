@@ -286,20 +286,34 @@ class Bot:
             )
             return
 
-        lines = [
-            f"📜 **对话历史: {active.title}**",
-            f"（共 {total} 条记录，显示最近 {len(entries)} 条）\n",
-        ]
-        for entry in entries:
+        # 构建美化卡片
+        lines = [f"📜 **{active.title}** · {total} 条记录 · 最近 {len(entries)} 条\n"]
+        for i, entry in enumerate(entries):
             role = entry.get("role", "")
             text = entry.get("text", "")
-            # 每条消息截断到 300 字
-            if len(text) > 300:
-                text = text[:300].rstrip() + "..."
+            ts = entry.get("timestamp", "")
+            # 解析时间戳，只显示 MM-DD HH:MM
+            time_str = ""
+            if ts:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(ts)
+                    time_str = f" `{dt.strftime('%m-%d %H:%M')}`"
+                except Exception:
+                    pass
+
+            # 每条消息截断
+            if len(text) > 250:
+                text = text[:250].rstrip() + "..."
+
             if role == "user":
-                lines.append(f"**👤 你**:\n{text}\n")
+                lines.append(f"**🙋 你**{time_str}\n> {text}\n")
             elif role == "assistant":
-                lines.append(f"**🤖 Claude**:\n{text}\n")
+                lines.append(f"**🤖 Claude**{time_str}\n> {text}\n")
+
+            # 在相邻的用户消息前加分隔线（非首条）
+            if i < len(entries) - 1 and entries[i + 1].get("role") == "user":
+                lines.append("---\n")
 
         await self.feishu.reply_message(
             msg_id,
