@@ -17,6 +17,7 @@ from state import state_store
 from feishu_client import FeishuClient
 from conversations import conv_store
 from stream_handler import run_claude_and_stream
+from history_store import history_store
 
 
 class Bot:
@@ -178,6 +179,9 @@ class Bot:
         await self.stop_claude()
         conv_store.delete(conv_id)
 
+        # 同步清理历史记录
+        history_store.delete(conv_id)
+
         active = conv_store.active
         state_store.update(active_conv_id=active.id if active else None)
 
@@ -236,6 +240,7 @@ class Bot:
             "",
             "**任务控制**",
             "• `/stop` — 终止当前 Claude 任务",
+            "• `/history` — 查看当前对话历史 (可加数字如 `/history 5`)",
             "• `/status` — 查看 Bot 状态",
             "• `/help` — 显示此帮助",
             "",
@@ -244,6 +249,46 @@ class Bot:
             "• Claude 正在执行时发新消息会自动排队",
             "• 会话上下文自动保留，`/switch` 切换对话继续聊",
         ]
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card("\n".join(lines))
+        )
+
+    async def _cmd_history(self, msg_id: str, n: int = 10) -> None:
+        """显示最近 N 条对话历史。"""
+        active = conv_store.active
+        if not active:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("📭 没有活跃对话")
+            )
+            return
+
+        entries = history_store.get_recent(active.id, n=n)
+        total = history_store.count(active.id)
+
+        if not entries:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card(f"📭 **{active.title}** 暂无历史消息")
+            )
+            return
+
+        lines = [
+            f"📜 **对话历史: {active.title}**",
+            f"（共 {total} 条记录，显示最近 {len(entries)} 条）\n",
+        ]
+        for entry in entries:
+            role = entry.get("role", "")
+            text = entry.get("text", "")
+            # 每条消息截断到 300 字
+            if len(text) > 300:
+                text = text[:300].rstrip() + "..."
+            if role == "user":
+                lines.append(f"**👤 你**:\n{text}\n")
+            elif role == "assistant":
+                lines.append(f"**🤖 Claude**:\n{text}\n")
+
         await self.feishu.reply_message(
             msg_id,
             FeishuClient.build_card("\n".join(lines))
@@ -345,11 +390,30 @@ class Bot:
             await self._cmd_help(msg_id)
             return
 
+        if stripped.startswith("/history"):
+            parts = stripped.split(None, 1)
+            n = 10
+            if len(parts) > 1:
+                try:
+                    n = int(parts[1])
+                    n = min(max(n, 1), 20)
+                except ValueError:
+                    await self.feishu.reply_message(
+                        msg_id,
+                        FeishuClient.build_card("❌ 参数必须是数字，如 `/history 10`")
+                    )
+                    return
+            await self._cmd_history(msg_id, n)
+            return
+
         # ── 执行 Claude ──────────────────────────────────────────────
 
         async with self._run_lock:
             active = conv_store.ensure_default()
             state_store.update(active_conv_id=active.id)
+
+            # 保存用户消息到历史
+            history_store.append(active.id, "user", text)
 
             # 关键改进：如果当前对话的 Claude 进程正在运行，新消息通过 queue 写入 stdin
             if self._is_claude_running_for_conv(active.id):

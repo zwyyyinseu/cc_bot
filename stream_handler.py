@@ -16,6 +16,7 @@ from config import config
 from feishu_client import FeishuClient
 from claude_runner import run_claude
 from conversations import conv_store
+from history_store import history_store
 
 if TYPE_CHECKING:
     import asyncio.subprocess
@@ -62,6 +63,7 @@ async def run_claude_and_stream(
     """
     buf: list[str] = []                  # 累积当前卡片的文本输出
     tool_log: list[str] = []             # 当前卡片的工具调用记录
+    history_buf: list[str] = []          # 累积完整回复文本（不受 tool_call 清空 buf 影响）
     current_msg_id = [thinking_msg_id]   # 当前正在更新的卡片 ID
     text_started = [False]               # 当前卡片是否已有文本输出
     last_msg_update = [0.0]              # 最后一次卡片更新时间（节流）
@@ -144,6 +146,7 @@ async def run_claude_and_stream(
                 last_output_time[0] = time.monotonic()  # 重置无输出检测
                 buf.clear()
                 tool_log.clear()
+                history_buf.clear()  # 新一轮对话，重置历史缓冲
                 text_started[0] = False
                 got_result[0] = False
             else:
@@ -163,6 +166,7 @@ async def run_claude_and_stream(
                 return
             last_output_time[0] = time.monotonic()
             buf.append(chunk)
+            history_buf.append(chunk)  # 累积完整回复（不受 tool_call 清空影响）
             text_started[0] = True
             await _throttled_update(current_msg_id[0], "".join(buf))
 
@@ -200,6 +204,13 @@ async def run_claude_and_stream(
 
         elif entry_type == "result":
             got_result[0] = True
+            # 保存 Claude 完整回复到历史
+            full_response = "".join(history_buf)
+            if full_response:
+                active = conv_store.active
+                if active:
+                    history_store.append(active.id, "assistant", full_response)
+            history_buf.clear()
             # result 后重置缓冲区，准备下一轮
             final_text = "".join(buf)
             if final_text:
