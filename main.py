@@ -144,6 +144,12 @@ class Bot:
         conv_store.set_active(conv.id)
         state_store.update(active_conv_id=conv.id)
 
+        # 切换后自动导入 Claude session 历史（如果本地还没有）
+        if conv.session_id:
+            imported = history_store.import_from_claude(conv.id, conv.workspace, conv.session_id)
+            if imported:
+                print(f"[bot] switch: imported {imported} history entries for conv {conv.id}")
+
         sid_status = f"（有历史上下文）" if conv.session_id else "（新会话）"
         await self.feishu.reply_message(
             msg_id,
@@ -263,6 +269,12 @@ class Bot:
                 FeishuClient.build_card("📭 没有活跃对话")
             )
             return
+
+        # 若本地无历史，尝试从 Claude session 文件导入
+        if history_store.count(active.id) == 0 and active.session_id:
+            imported = history_store.import_from_claude(active.id, active.workspace, active.session_id)
+            if imported:
+                print(f"[bot] imported {imported} history entries for conv {active.id}")
 
         entries = history_store.get_recent(active.id, n=n)
         total = history_store.count(active.id)
