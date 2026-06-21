@@ -1,0 +1,14 @@
+# 敏感凭证
+.env
+
+# 运行时数据
+data/
+workspace/
+
+# 日志和 PID
+bot.log
+bot.pid
+
+# Python
+__pycache__/
+*.pyc

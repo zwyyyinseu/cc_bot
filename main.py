@@ -1,0 +1,488 @@
+"""
+cc_bot 入口 —— asyncio 事件循环 + 消息轮询主循环。
+
+核心改进：
+  - 多轮消息模式：Claude 进程保持 stdin 打开，用户发新消息通过 queue 写入 stdin
+  - 用户发新消息不会 kill 当前 Claude 进程，而是排队继续
+  - 只有 /stop 和 /switch 才会终止进程
+"""
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from typing import Optional
+
+from config import config
+from state import state_store
+from feishu_client import FeishuClient
+from conversations import conv_store
+from stream_handler import run_claude_and_stream
+
+
+class Bot:
+    def __init__(self) -> None:
+        self.feishu = FeishuClient()
+        self._claude_task: Optional[asyncio.Task] = None
+        self._claude_proc: Optional[asyncio.subprocess.Process] = None
+        self._run_lock = asyncio.Lock()
+        # 多轮消息队列：Claude 进程运行期间，新消息写入此队列
+        self._message_queue: Optional[asyncio.Queue] = None
+        # 对话 ID → message_queue 的映射，用于跨消息保持
+        self._conv_queue: dict[str, asyncio.Queue] = {}
+
+    # ── Claude 进程生命周期 ─────────────────────────────────────────────
+
+    async def stop_claude(self) -> None:
+        """终止正在运行的 Claude 进程。"""
+        # 清理消息队列
+        if self._message_queue:
+            try:
+                self._message_queue.put_nowait(None)  # sentinel
+            except Exception:
+                pass
+            self._message_queue = None
+
+        if self._claude_proc and self._claude_proc.returncode is None:
+            try:
+                self._claude_proc.kill()
+            except Exception:
+                pass
+        if self._claude_task and not self._claude_task.done():
+            self._claude_task.cancel()
+            try:
+                await asyncio.shield(self._claude_task)
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._claude_proc = None
+        self._claude_task = None
+        self._conv_queue.clear()
+
+    def _register_proc(self, proc) -> None:
+        """注册 Claude 子进程引用。"""
+        self._claude_proc = proc
+
+    def _on_stdin_close(self) -> None:
+        """stdin 关闭回调：清理队列注册。"""
+        self._message_queue = None
+        self._conv_queue.clear()
+        print("[bot] stdin closed, queue unregistered")
+
+    def _is_claude_running(self) -> bool:
+        """检查 Claude 进程是否正在运行。"""
+        return (self._claude_task is not None
+                and not self._claude_task.done()
+                and self._claude_proc is not None
+                and self._claude_proc.returncode is None)
+
+    def _is_claude_running_for_conv(self, conv_id: str) -> bool:
+        """检查指定对话的 Claude 进程是否正在运行。"""
+        return self._is_claude_running() and conv_id in self._conv_queue
+
+    # ── Chat ID 发现 ────────────────────────────────────────────────────
+
+    async def _discover_chat_id(self) -> None:
+        """向用户发送 P2P 消息以发现 chat_id。"""
+        print("[bot] discovering chat_id by sending P2P message to user...")
+        card = FeishuClient.build_card(
+            "🟢 **Claude Vibecoding Bot 已上线**\n\n"
+            "直接发消息给我，即可开始对话！\n\n"
+            "**命令：**\n"
+            "• `/new 标题` — 创建新对话\n"
+            "• `/list` — 查看所有对话\n"
+            "• `/switch 序号` — 切换对话\n"
+            "• `/del 序号` — 删除对话\n"
+            "• `/stop` — 终止当前任务"
+        )
+        msg_id = await self.feishu.send_message(
+            receive_id=config.FEISHU_OPEN_ID,
+            card_json=card,
+            receive_id_type="open_id",
+        )
+        if msg_id:
+            print(f"[bot] online notification sent: {msg_id}")
+
+    # ── 命令处理 ────────────────────────────────────────────────────────
+
+    async def _cmd_list(self, msg_id: str) -> None:
+        """列出所有对话。"""
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card(conv_store.format_list())
+        )
+
+    async def _cmd_new(self, msg_id: str, title: str = "新对话") -> None:
+        """创建新对话并切换。"""
+        await self.stop_claude()
+        conv = conv_store.create(title=title)
+        state_store.update(active_conv_id=conv.id)
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card(f"🆕 已创建并切换到对话「**{conv.title}**」（{conv.id}）\n\n下次对话将从零开始。")
+        )
+
+    async def _cmd_switch(self, msg_id: str, index_str: str) -> None:
+        """切换到指定对话。"""
+        try:
+            index = int(index_str)
+        except ValueError:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("❌ 序号必须是数字，如 `/switch 1`")
+            )
+            return
+
+        conv = conv_store.get_by_index(index)
+        if not conv:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card(f"❌ 序号 {index} 不存在，发送 `/list` 查看所有对话")
+            )
+            return
+
+        await self.stop_claude()
+        conv_store.set_active(conv.id)
+        state_store.update(active_conv_id=conv.id)
+
+        sid_status = f"（有历史上下文）" if conv.session_id else "（新会话）"
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card(
+                f"✅ 已切换到对话「**{conv.title}**」（{conv.id}）{sid_status}\n\n"
+                f"继续上次的话题吧！"
+            )
+        )
+
+    async def _cmd_del(self, msg_id: str, index_str: str) -> None:
+        """删除指定对话。"""
+        try:
+            index = int(index_str)
+        except ValueError:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("❌ 序号必须是数字，如 `/del 1`")
+            )
+            return
+
+        conv = conv_store.get_by_index(index)
+        if not conv:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card(f"❌ 序号 {index} 不存在，发送 `/list` 查看所有对话")
+            )
+            return
+
+        conv_title = conv.title
+        conv_id = conv.id
+        is_active = conv.id == conv_store.active_id
+
+        await self.stop_claude()
+        conv_store.delete(conv_id)
+
+        active = conv_store.active
+        state_store.update(active_conv_id=active.id if active else None)
+
+        active_note = "\n\n⚠️ 删除的是当前活跃对话，已自动切换到最近的对话。" if is_active else ""
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card(f"🗑️ 已删除对话「**{conv_title}**」{active_note}")
+        )
+
+    async def _cmd_stop(self, msg_id: str) -> None:
+        """终止当前 Claude 进程。"""
+        if self._is_claude_running():
+            await self.stop_claude()
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("⛔ 当前任务已终止。")
+            )
+        else:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("ℹ️ 当前没有正在执行的任务。")
+            )
+
+    async def _cmd_status(self, msg_id: str) -> None:
+        """显示 bot 和 Claude 运行状态。"""
+        claude_running = self._is_claude_running()
+        active = conv_store.active
+        active_title = active.title if active else "无"
+
+        lines = [
+            "📊 **Bot 状态**",
+            "",
+            f"• Bot 运行中 ✅",
+            f"• Claude 进程: {'🟢 运行中' if claude_running else '⚫ 空闲'}",
+            f"• 活跃对话: **{active_title}**",
+            f"• 对话总数: {len(conv_store.list_all())}",
+            f"• 轮询间隔: {config.POLL_INTERVAL}s",
+            "",
+            "💡 发送 `/help` 查看所有命令",
+        ]
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card("\n".join(lines))
+        )
+
+    async def _cmd_help(self, msg_id: str) -> None:
+        """显示帮助信息。"""
+        lines = [
+            "📖 **命令列表**",
+            "",
+            "**对话管理**",
+            "• `/new 标题` — 创建新对话",
+            "• `/list` — 列出所有对话",
+            "• `/switch 序号` — 切换对话",
+            "• `/del 序号` — 删除对话",
+            "",
+            "**任务控制**",
+            "• `/stop` — 终止当前 Claude 任务",
+            "• `/status` — 查看 Bot 状态",
+            "• `/help` — 显示此帮助",
+            "",
+            "**使用方式**",
+            "• 直接发消息与 Claude 对话",
+            "• Claude 正在执行时发新消息会自动排队",
+            "• 会话上下文自动保留，`/switch` 切换对话继续聊",
+        ]
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card("\n".join(lines))
+        )
+
+    # ── 消息处理 ────────────────────────────────────────────────────────
+
+    async def _handle_message(self, msg: dict) -> None:
+        """处理单条飞书消息。"""
+        msg_id = msg.get("message_id", "")
+        if not msg_id:
+            return
+
+        # 去重：用 create_time 判断
+        msg_create_time = msg.get("create_time", "0")
+        try:
+            msg_ts = int(msg_create_time)
+        except (ValueError, TypeError):
+            msg_ts = 0
+
+        last_ts = state_store.state.last_message_ts or 0
+        if msg_ts < last_ts:
+            return
+        if msg_ts == last_ts and msg_id == state_store.state.last_message_id:
+            return
+
+        state_store.update(last_message_ts=msg_ts, last_message_id=msg_id)
+
+        # 提取消息内容
+        content_str = msg.get("body", {}).get("content", "{}")
+        if isinstance(content_str, bytes):
+            content_str = content_str.decode("utf-8", errors="replace")
+        text = FeishuClient.extract_text(content_str)
+
+        sender = msg.get("sender", {})
+        sender_id = sender.get("sender_id", {})
+        sender_open_id = sender_id.get("open_id", "") if isinstance(sender_id, dict) else ""
+
+        chat_id = msg.get("chat_id", "")
+        message_type = msg.get("msg_type", "text")
+
+        if message_type != "text":
+            return
+        if sender_open_id and sender_open_id != config.FEISHU_OPEN_ID:
+            return
+        if not text:
+            return
+
+        if chat_id and not state_store.state.chat_id:
+            state_store.update(chat_id=chat_id)
+            print(f"[bot] chat_id discovered: {chat_id}")
+
+        print(f"[bot] handling message: {text[:80]!r}")
+
+        # ── 命令路由 ─────────────────────────────────────────────────
+
+        stripped = text.strip()
+
+        if stripped in ("/list", "/ls"):
+            await self._cmd_list(msg_id)
+            return
+
+        if stripped.startswith("/new"):
+            title = stripped[4:].strip() or "新对话"
+            await self._cmd_new(msg_id, title)
+            return
+
+        if stripped.startswith("/switch"):
+            index_str = stripped[7:].strip()
+            if not index_str:
+                await self.feishu.reply_message(
+                    msg_id,
+                    FeishuClient.build_card("❌ 请指定序号，如 `/switch 1`\n\n发送 `/list` 查看所有对话")
+                )
+                return
+            await self._cmd_switch(msg_id, index_str)
+            return
+
+        if stripped.startswith("/del"):
+            index_str = stripped[4:].strip()
+            if not index_str:
+                await self.feishu.reply_message(
+                    msg_id,
+                    FeishuClient.build_card("❌ 请指定序号，如 `/del 1`\n\n发送 `/list` 查看所有对话")
+                )
+                return
+            await self._cmd_del(msg_id, index_str)
+            return
+
+        if stripped == "/stop":
+            await self._cmd_stop(msg_id)
+            return
+
+        if stripped in ("/status", "/stat"):
+            await self._cmd_status(msg_id)
+            return
+
+        if stripped in ("/help", "/h", "/?"):
+            await self._cmd_help(msg_id)
+            return
+
+        # ── 执行 Claude ──────────────────────────────────────────────
+
+        async with self._run_lock:
+            active = conv_store.ensure_default()
+            state_store.update(active_conv_id=active.id)
+
+            # 关键改进：如果当前对话的 Claude 进程正在运行，新消息通过 queue 写入 stdin
+            if self._is_claude_running_for_conv(active.id):
+                print(f"[bot] queuing message to running Claude: {text[:50]!r}")
+                await self._message_queue.put({
+                    "msg_type": "user_message",
+                    "text": text,
+                    "user_message_id": msg_id,
+                })
+                return
+
+            # Claude 不在运行，启动新的
+            await self.stop_claude()  # 清理可能残留的旧进程
+
+            # 创建消息队列
+            q: asyncio.Queue = asyncio.Queue()
+            self._message_queue = q
+            self._conv_queue[active.id] = q
+
+            # 回复"正在思考"
+            conv_hint = f"💬 **{active.title}**\n\n⏳ 正在思考..."
+            reply_msg_id = await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card(conv_hint)
+            )
+            if not reply_msg_id:
+                print("[bot] failed to send thinking message")
+                return
+
+            # 启动 Claude 流式执行
+            self._claude_task = asyncio.create_task(
+                run_claude_and_stream(
+                    feishu=self.feishu,
+                    text=text,
+                    thinking_msg_id=reply_msg_id,
+                    user_message_id=msg_id,
+                    session_id=active.session_id,
+                    workspace=active.workspace,
+                    on_proc=self._register_proc,
+                    message_queue=q,
+                    on_stdin_close=self._on_stdin_close,
+                )
+            )
+
+    # ── 轮询主循环 ──────────────────────────────────────────────────────
+
+    async def _poll_loop(self) -> None:
+        """每 POLL_INTERVAL 秒轮询飞书消息，连续错误时指数退避。"""
+        print("[bot] poll loop started")
+        err_count = 0
+        while True:
+            sleep_time = config.POLL_INTERVAL
+            try:
+                chat_id = state_store.state.chat_id
+                if not chat_id:
+                    await asyncio.sleep(config.POLL_INTERVAL)
+                    continue
+
+                messages = await self.feishu.get_messages(chat_id)
+                if messages is None:  # API 错误 → 指数退避
+                    err_count += 1
+                    sleep_time = min(config.POLL_INTERVAL * (2 ** min(err_count, 5)), 60.0)
+                    print(f"[bot] get_messages API error, backing off to {sleep_time}s (err_count={err_count})")
+                else:
+                    err_count = 0  # 成功，重置计数
+                    if messages:
+                        # 过滤新消息：用 create_time 判断
+                        last_ts = state_store.state.last_message_ts or 0
+                        new_msgs = []
+                        for m in messages:
+                            ct = m.get("create_time", "0")
+                            try:
+                                ct_int = int(ct)
+                            except (ValueError, TypeError):
+                                ct_int = 0
+                            if ct_int > last_ts:
+                                new_msgs.append(m)
+                            elif ct_int == last_ts and m.get("message_id", "") != state_store.state.last_message_id:
+                                new_msgs.append(m)
+
+                        if new_msgs:
+                            new_msgs.sort(key=lambda m: m.get("create_time", "0"))
+                            for msg in new_msgs:
+                                await self._handle_message(msg)
+
+            except Exception as e:
+                print(f"[bot] poll loop error: {e}")
+                err_count += 1
+                sleep_time = min(config.POLL_INTERVAL * (2 ** min(err_count, 5)), 60.0)
+
+            await asyncio.sleep(sleep_time)
+
+    # ── 启动与关闭 ──────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """启动 Bot。"""
+        Path(config.WORKSPACE_DIR).mkdir(parents=True, exist_ok=True)
+        Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
+
+        state_store.load()
+        print(f"[bot] state loaded: chat_id={state_store.state.chat_id}, "
+              f"active_conv_id={state_store.state.active_conv_id}")
+
+        conv_store.load(active_conv_id=state_store.state.active_conv_id)
+        conv_store.ensure_default()
+        print(f"[bot] conversations loaded: {len(conv_store.list_all())} convs, "
+              f"active={conv_store.active.id if conv_store.active else None}")
+
+        if conv_store.active:
+            state_store.update(active_conv_id=conv_store.active.id)
+
+        if not state_store.state.chat_id:
+            await self._discover_chat_id()
+
+        try:
+            await self._poll_loop()
+        finally:
+            await self.feishu.close()
+
+    async def shutdown(self) -> None:
+        """关闭 Bot。"""
+        print("[bot] shutting down...")
+        await self.stop_claude()
+        await self.feishu.close()
+
+
+async def main():
+    bot = Bot()
+    try:
+        await bot.start()
+    except KeyboardInterrupt:
+        await bot.shutdown()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
