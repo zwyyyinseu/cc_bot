@@ -121,6 +121,28 @@ class Bot:
             FeishuClient.build_card(f"🆕 已创建并切换到对话「**{conv.title}**」（{conv.id}）\n\n下次对话将从零开始。")
         )
 
+    async def _cmd_rename(self, msg_id: str, new_title: str) -> None:
+        """重命名当前活跃对话。"""
+        if not new_title.strip():
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("❌ 请指定新名字，如 `/rename 我的项目`")
+            )
+            return
+        active = conv_store.active
+        if not active:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("❌ 没有活跃对话")
+            )
+            return
+        old_title = active.title
+        conv_store.update(active.id, title=new_title.strip())
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card(f"✏️ 已重命名「**{old_title}**」→「**{new_title.strip()}**」")
+        )
+
     async def _cmd_switch(self, msg_id: str, index_str: str) -> None:
         """切换到指定对话。"""
         try:
@@ -240,6 +262,7 @@ class Bot:
             "",
             "**对话管理**",
             "• `/new 标题` — 创建新对话",
+            "• `/rename 新名字` — 重命名当前对话",
             "• `/list` — 列出所有对话",
             "• `/switch 序号` — 切换对话",
             "• `/del 序号` — 删除对话",
@@ -380,6 +403,11 @@ class Bot:
         if stripped.startswith("/new"):
             title = stripped[4:].strip() or "新对话"
             await self._cmd_new(msg_id, title)
+            return
+
+        if stripped.startswith("/rename"):
+            new_title = stripped[7:].strip()
+            await self._cmd_rename(msg_id, new_title)
             return
 
         if stripped.startswith("/switch"):
