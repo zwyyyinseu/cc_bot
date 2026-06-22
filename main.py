@@ -36,7 +36,7 @@ class Bot:
         # 休眠/唤醒状态机
         self._idle = True                # 启动默认休眠
         self._last_active = time.monotonic()  # 最后一次用户交互时间
-        self._auto_idle_sec = 1800.0     # 30 分钟无消息自动休眠
+        self._auto_idle_sec = config.AUTO_IDLE_SEC  # 从配置读取
 
     # ── Claude 进程生命周期 ─────────────────────────────────────────────
 
@@ -251,7 +251,7 @@ class Bot:
         active_title = active.title if active else "无"
 
         mode_line = "😴 休眠中" if self._idle else "🟢 活跃"
-        poll_interval = 30.0 if self._idle else config.POLL_INTERVAL
+        poll_interval = config.IDLE_POLL_INTERVAL if self._idle else config.POLL_INTERVAL
 
         lines = [
             "📊 **Bot 状态**",
@@ -299,7 +299,7 @@ class Bot:
             FeishuClient.build_card("\n".join(lines))
         )
 
-    async def _cmd_history(self, msg_id: str, n: int = 10) -> None:
+    async def _cmd_history(self, msg_id: str, n: int = config.HISTORY_DISPLAY_N) -> None:
         """显示最近 N 条对话历史。"""
         active = conv_store.active
         if not active:
@@ -342,8 +342,8 @@ class Bot:
                     pass
 
             # 每条消息截断
-            if len(text) > 250:
-                text = text[:250].rstrip() + "..."
+            if len(text) > config.HISTORY_MAX_CHARS:
+                text = text[:config.HISTORY_MAX_CHARS].rstrip() + "..."
 
             if role == "user":
                 lines.append(f"**🙋 你**{time_str}\n> {text}\n")
@@ -390,11 +390,11 @@ class Bot:
             if stripped.startswith(prefix):
                 arg = stripped[plen:].strip()
                 if handler is None:  # /history 特殊：解析数字参数
-                    n = 10
+                    n = config.HISTORY_DISPLAY_N
                     if arg:
                         try:
                             n = int(arg)
-                            n = min(max(n, 1), 20)
+                            n = min(max(n, 1), config.HISTORY_DISPLAY_MAX)
                         except ValueError:
                             await self.feishu.reply_message(
                                 msg_id,
@@ -568,7 +568,7 @@ class Bot:
 
     async def _poll_loop(self) -> None:
         """轮询飞书消息。休眠态 30s 间隔，活跃态 2s 间隔。活跃态 30min 无消息自动休眠。"""
-        IDLE_INTERVAL = 30.0  # 休眠态轮询间隔
+        IDLE_INTERVAL = config.IDLE_POLL_INTERVAL  # 从配置读取
         log.info("poll loop started (idle mode)")
         err_count = 0
         while True:

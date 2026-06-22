@@ -295,7 +295,7 @@ async def run_claude(
         通知上层显示错误卡片并关闭进程。"""
         if message_queue is None:
             return
-        RESULT_TIMEOUT = 600.0  # 单轮最长等待 10 分钟（断网时 API 自身超时约 10 分钟）
+        RESULT_TIMEOUT = config.RESULT_TIMEOUT  # 单轮最长等待（默认 10 分钟）
         while True:
             try:
                 await asyncio.wait_for(result_event.wait(), timeout=RESULT_TIMEOUT)

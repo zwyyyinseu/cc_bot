@@ -65,11 +65,13 @@ class HistoryStore:
         except Exception as e:
             log.error(f"append failed conv={conv_id}: {e}")
 
-    def get_recent(self, conv_id: str, n: int = 10) -> list[dict]:
-        """取最近 N 条记录（按时间正序），n 上限 20。
+    def get_recent(self, conv_id: str, n: int = None) -> list[dict]:
+        """取最近 N 条记录（按时间正序）。
         若本地无历史文件，自动尝试从 Claude session 导入。
         """
-        n = min(max(n, 1), 20)
+        if n is None:
+            n = config.HISTORY_DISPLAY_N
+        n = min(max(n, 1), config.HISTORY_DISPLAY_MAX)
         path = self._path(conv_id)
         if not path.exists():
             return []
