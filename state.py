@@ -9,6 +9,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from config import config
+import logging
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,7 +34,7 @@ class StateStore:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
             self._state = State(**{k: v for k, v in raw.items() if k in State.__dataclass_fields__})
         except Exception as e:
-            print(f"[state] load failed, using defaults: {e}")
+            log.error(f"load failed, using defaults: {e}")
             self._state = State()
         return self._state
 
@@ -47,7 +49,7 @@ class StateStore:
             )
             tmp.rename(self._path)
         except Exception as e:
-            print(f"[state] save failed: {e}")
+            log.error(f"save failed: {e}")
             try:
                 tmp.unlink(missing_ok=True)
             except Exception:
@@ -67,3 +69,4 @@ class StateStore:
 
 # 单例
 state_store = StateStore()
+

@@ -13,6 +13,8 @@ from typing import Optional
 import httpx
 
 from config import config
+import logging
+log = logging.getLogger(__name__)
 
 _BASE_URL = "https://open.feishu.cn/open-apis"
 
@@ -53,7 +55,7 @@ class FeishuClient:
             raise RuntimeError(f"获取 token 失败: code={data.get('code')} msg={data.get('msg')}")
         self._token = data["tenant_access_token"]
         self._token_expires = time.time() + data.get("expire", 7200)
-        print(f"[feishu] token refreshed, expires in {data.get('expire', 7200)}s")
+        log.info(f"token refreshed, expires in {data.get('expire', 7200)}s")
         return self._token
 
     async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
@@ -65,7 +67,7 @@ class FeishuClient:
 
         # 401 → 刷新 token 重试
         if resp.status_code == 401:
-            print("[feishu] got 401, refreshing token and retrying...")
+            log.warning("got 401, refreshing token and retrying...")
             async with self._token_lock:
                 token = await self._refresh_token()
             headers["Authorization"] = f"Bearer {token}"
@@ -76,7 +78,7 @@ class FeishuClient:
         try:
             body_data = resp.json()
             if body_data.get("code") == 99991663:  # 1663 with prefix
-                print("[feishu] got 1663 (token expired), refreshing and retrying...")
+                log.warning("got 1663 (token expired), refreshing and retrying...")
                 async with self._token_lock:
                     token = await self._refresh_token()
                 headers["Authorization"] = f"Bearer {token}"
@@ -104,7 +106,7 @@ class FeishuClient:
         )
         data = resp.json()
         if data.get("code") != 0:
-            print(f"[feishu] get_messages failed: code={data.get('code')} msg={data.get('msg')}")
+            log.error(f"get_messages failed: code={data.get('code')} msg={data.get('msg')}")
             return None  # None = API error, distinct from [] = no messages
         items = data.get("data", {}).get("items", [])
         return items if items else []
@@ -121,7 +123,7 @@ class FeishuClient:
         )
         data = resp.json()
         if data.get("code") != 0:
-            print(f"[feishu] reply_message failed: code={data.get('code')} msg={data.get('msg')}")
+            log.error(f"reply_message failed: code={data.get('code')} msg={data.get('msg')}")
             return None
         return data.get("data", {}).get("message_id")
 
@@ -134,7 +136,7 @@ class FeishuClient:
         )
         data = resp.json()
         if data.get("code") != 0:
-            print(f"[feishu] update_card failed: code={data.get('code')} msg={data.get('msg')}")
+            log.error(f"update_card failed: code={data.get('code')} msg={data.get('msg')}")
             return False
         return True
 
@@ -153,7 +155,7 @@ class FeishuClient:
         )
         data = resp.json()
         if data.get("code") != 0:
-            print(f"[feishu] send_message failed: code={data.get('code')} msg={data.get('msg')}")
+            log.error(f"send_message failed: code={data.get('code')} msg={data.get('msg')}")
             return None
         return data.get("data", {}).get("message_id")
 
@@ -189,3 +191,4 @@ class FeishuClient:
         # WS 长连接格式：@_user_1 @_user_2 等（防御性处理）
         text = re.sub(r"@_user_\d+\s*", "", text)
         return text.strip()
+

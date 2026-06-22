@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Optional
 
 from config import config
+import logging
+log = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -61,7 +63,7 @@ class HistoryStore:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as e:
-            print(f"[history_store] append failed conv={conv_id}: {e}")
+            log.error(f"append failed conv={conv_id}: {e}")
 
     def get_recent(self, conv_id: str, n: int = 10) -> list[dict]:
         """取最近 N 条记录（按时间正序），n 上限 20。
@@ -82,7 +84,7 @@ class HistoryStore:
                 except json.JSONDecodeError:
                     continue  # 跳过损坏的行
         except Exception as e:
-            print(f"[history_store] read failed conv={conv_id}: {e}")
+            log.error(f"read failed conv={conv_id}: {e}")
             return []
         # 返回最后 n 条（按时间正序）
         return entries[-n:]
@@ -105,7 +107,7 @@ class HistoryStore:
         try:
             path.unlink(missing_ok=True)
         except Exception as e:
-            print(f"[history_store] delete failed conv={conv_id}: {e}")
+            log.error(f"delete failed conv={conv_id}: {e}")
 
     # ── Claude Session 导入 ─────────────────────────────────────────────
 
@@ -169,7 +171,7 @@ class HistoryStore:
                             entries.append({"role": "assistant", "text": full_text, "timestamp": ts})
 
         except Exception as e:
-            print(f"[history_store] import failed conv={conv_id}: {e}")
+            log.error(f"import failed conv={conv_id}: {e}")
             return 0
 
         if not entries:
@@ -182,12 +184,13 @@ class HistoryStore:
                 for entry in entries:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except Exception as e:
-            print(f"[history_store] write after import failed conv={conv_id}: {e}")
+            log.error(f"write after import failed conv={conv_id}: {e}")
             return 0
 
-        print(f"[history_store] imported {len(entries)} entries from {session_path.name} → conv={conv_id}")
+        log.info(f"imported {len(entries)} entries from {session_path.name} → conv={conv_id}")
         return len(entries)
 
 
 # 单例
 history_store = HistoryStore()
+

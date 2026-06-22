@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Callable, Awaitable, Optional
 
 from config import config
+import logging
+log = logging.getLogger(__name__)
 
 # 回调类型
 EventCallback = Callable[[dict], Awaitable[None]]
@@ -128,7 +130,7 @@ async def run_claude(
             break
         except (TypeError, OSError) as e:
             last_exc = e
-            print(f"[claude_runner] create_subprocess_exec attempt {attempt + 1} failed: {e}")
+            log.error(f"create_subprocess_exec attempt {attempt + 1} failed: {e}")
             if attempt < 2:
                 await asyncio.sleep(0.5)
     if last_exc is not None:
@@ -151,7 +153,7 @@ async def run_claude(
             # 单轮模式：写完立即关闭 stdin
             proc.stdin.close()
     except Exception as e:
-        print(f"[claude_runner] stdin write error: {e}")
+        log.error(f"stdin write error: {e}")
 
     # ── 读取 stdout ────────────────────────────────────────────────────
     async def _read_stdout():
@@ -228,7 +230,7 @@ async def run_claude(
                         await on_event({"type": "system", "text": str(text)})
 
             except Exception as e:
-                print(f"[claude_runner] on_event error: {e}")
+                log.error(f"on_event error: {e}")
 
     # ── 读取 stderr ────────────────────────────────────────────────────
     async def _read_stderr():
@@ -241,7 +243,7 @@ async def run_claude(
                     except Exception:
                         pass
         except Exception as e:
-            print(f"[claude_runner] stderr read error: {e}")
+            log.error(f"stderr read error: {e}")
 
     # ── 多轮消息处理（参照 remote_cli 双协程模式）─────────────────────
     # _stdin_writer: 消息到达时立即写入 stdin（不等待 result），减少轮次间延迟
@@ -253,14 +255,14 @@ async def run_claude(
         while True:
             next_msg = await message_queue.get()
             if next_msg is None:  # sentinel：关闭 stdin
-                print(f"[claude_runner] closing stdin (sentinel from close_checker)")
+                log.info(f"closing stdin (sentinel from close_checker)")
                 try:
                     proc.stdin.close()
                 except Exception:
                     pass
                 return
 
-            print(f"[claude_runner] writing message to stdin: type={next_msg.get('msg_type', 'user_message')}")
+            log.info(f"writing message to stdin: type={next_msg.get('msg_type', 'user_message')}")
             # ★ 先通知 stream_handler 创建新卡片，再写入 stdin ★
             # 避免 _read_stdout 读到输出后 append buf，然后 new_round 才 clear buf 的竞态
             if on_event:
@@ -284,7 +286,7 @@ async def run_claude(
                 proc.stdin.write(data)
                 await proc.stdin.drain()
             except Exception as e:
-                print(f"[claude_runner] stdin write error: {e}")
+                log.error(f"stdin write error: {e}")
                 return
 
     async def _stdin_close_checker():
@@ -298,7 +300,7 @@ async def run_claude(
             try:
                 await asyncio.wait_for(result_event.wait(), timeout=RESULT_TIMEOUT)
             except asyncio.TimeoutError:
-                print(f"[claude_runner] result timeout ({RESULT_TIMEOUT}s), possible network issue")
+                log.error(f"result timeout ({RESULT_TIMEOUT}s), possible network issue")
                 if on_event:
                     try:
                         await on_event({"type": "timeout_error", "seconds": RESULT_TIMEOUT})
@@ -317,7 +319,7 @@ async def run_claude(
                 return
             result_event.clear()
             if message_queue.empty():
-                print(f"[claude_runner] queue empty after result, closing stdin")
+                log.info(f"queue empty after result, closing stdin")
                 if on_stdin_close:
                     try:
                         on_stdin_close()
@@ -326,7 +328,7 @@ async def run_claude(
                 await message_queue.put(None)  # sentinel 通知 _stdin_writer
                 return
             # 队列还有消息，继续等下一个 result
-            print(f"[claude_runner] queue not empty after result, continuing")
+            log.info(f"queue not empty after result, continuing")
 
     # ── 并发启动所有任务 ───────────────────────────────────────────────
     stdout_task = asyncio.create_task(_read_stdout())
@@ -358,3 +360,4 @@ async def run_claude(
     await asyncio.sleep(0)
 
     return exit_code, cost_usd
+

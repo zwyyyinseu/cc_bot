@@ -19,6 +19,8 @@ from feishu_client import FeishuClient
 from conversations import conv_store
 from stream_handler import run_claude_and_stream
 from history_store import history_store
+import logging
+log = logging.getLogger(__name__)
 
 
 class Bot:
@@ -71,7 +73,7 @@ class Bot:
         """stdin 关闭回调：清理队列注册。"""
         self._message_queue = None
         self._conv_queue.clear()
-        print("[bot] stdin closed, queue unregistered")
+        log.info("stdin closed, queue unregistered")
 
     def _is_claude_running(self) -> bool:
         """检查 Claude 进程是否正在运行。"""
@@ -88,7 +90,7 @@ class Bot:
 
     async def _discover_chat_id(self) -> None:
         """向用户发送 P2P 消息以发现 chat_id。"""
-        print("[bot] discovering chat_id by sending P2P message to user...")
+        log.info("discovering chat_id by sending P2P message to user...")
         card = FeishuClient.build_card(
             "😴 **Claude Bot 已就绪（休眠中）**\n\n"
             "发送 **`/start`** 激活 Bot，即可开始对话！\n\n"
@@ -106,7 +108,7 @@ class Bot:
             receive_id_type="open_id",
         )
         if msg_id:
-            print(f"[bot] online notification sent: {msg_id}")
+            log.info(f"online notification sent: {msg_id}")
 
     # ── 命令处理 ────────────────────────────────────────────────────────
 
@@ -176,7 +178,7 @@ class Bot:
         if conv.session_id:
             imported = history_store.import_from_claude(conv.id, conv.workspace, conv.session_id)
             if imported:
-                print(f"[bot] switch: imported {imported} history entries for conv {conv.id}")
+                log.info(f"switch: imported {imported} history entries for conv {conv.id}")
 
         sid_status = f"（有历史上下文）" if conv.session_id else "（新会话）"
         await self.feishu.reply_message(
@@ -230,7 +232,7 @@ class Bot:
         if self._is_claude_running():
             await self.stop_claude()
             self._idle = True
-            print("[bot] STOPPED + entering idle")
+            log.info("STOPPED + entering idle")
             await self.feishu.reply_message(
                 msg_id,
                 FeishuClient.build_card("😴 **Bot 已休眠**\n\nClaude 进程已终止，发送 **`/start`** 唤醒。")
@@ -311,7 +313,7 @@ class Bot:
         if history_store.count(active.id) == 0 and active.session_id:
             imported = history_store.import_from_claude(active.id, active.workspace, active.session_id)
             if imported:
-                print(f"[bot] imported {imported} history entries for conv {active.id}")
+                log.info(f"imported {imported} history entries for conv {active.id}")
 
         entries = history_store.get_recent(active.id, n=n)
         total = history_store.count(active.id)
@@ -402,9 +404,9 @@ class Bot:
 
         if chat_id and not state_store.state.chat_id:
             state_store.update(chat_id=chat_id)
-            print(f"[bot] chat_id discovered: {chat_id}")
+            log.info(f"chat_id discovered: {chat_id}")
 
-        print(f"[bot] handling message: {text[:80]!r}")
+        log.info(f"handling message: {text[:80]!r}")
 
         # 更新最后活跃时间
         self._last_active = time.monotonic()
@@ -416,7 +418,7 @@ class Bot:
             if stripped == "/start":
                 self._idle = False
                 self._last_active = time.monotonic()
-                print("[bot] ACTIVATED by /start")
+                log.info("ACTIVATED by /start")
                 await self.feishu.reply_message(
                     msg_id,
                     FeishuClient.build_card(
@@ -524,7 +526,7 @@ class Bot:
 
             # 关键改进：如果当前对话的 Claude 进程正在运行，新消息通过 queue 写入 stdin
             if self._is_claude_running_for_conv(active.id):
-                print(f"[bot] queuing message to running Claude: {text[:50]!r}")
+                log.info(f"queuing message to running Claude: {text[:50]!r}")
                 await self._message_queue.put({
                     "msg_type": "user_message",
                     "text": text,
@@ -547,7 +549,7 @@ class Bot:
                 FeishuClient.build_card(conv_hint)
             )
             if not reply_msg_id:
-                print("[bot] failed to send thinking message")
+                log.error("failed to send thinking message")
                 return
 
             # 启动 Claude 流式执行
@@ -570,7 +572,7 @@ class Bot:
     async def _poll_loop(self) -> None:
         """轮询飞书消息。休眠态 30s 间隔，活跃态 2s 间隔。活跃态 30min 无消息自动休眠。"""
         IDLE_INTERVAL = 30.0  # 休眠态轮询间隔
-        print("[bot] poll loop started (idle mode)")
+        log.info("poll loop started (idle mode)")
         err_count = 0
         while True:
             # 动态间隔：休眠 30s，活跃 2s
@@ -581,7 +583,7 @@ class Bot:
             if not self._idle:
                 idle_sec = time.monotonic() - self._last_active
                 if idle_sec > self._auto_idle_sec:
-                    print(f"[bot] auto-idle after {idle_sec:.0f}s inactive")
+                    log.info(f"auto-idle after {idle_sec:.0f}s inactive")
                     if self._is_claude_running():
                         await self.stop_claude()
                     self._idle = True
@@ -597,7 +599,7 @@ class Bot:
                 if messages is None:  # API 错误 → 指数退避
                     err_count += 1
                     sleep_time = min(base_interval * (2 ** min(err_count, 5)), 60.0)
-                    print(f"[bot] get_messages API error, backing off to {sleep_time}s (err_count={err_count})")
+                    log.error(f"get_messages API error, backing off to {sleep_time}s (err_count={err_count})")
                 else:
                     err_count = 0  # 成功，重置计数
                     if messages:
@@ -621,7 +623,7 @@ class Bot:
                                 await self._handle_message(msg)
 
             except Exception as e:
-                print(f"[bot] poll loop error: {e}")
+                log.error(f"poll loop error: {e}")
                 err_count += 1
                 sleep_time = min(base_interval * (2 ** min(err_count, 5)), 60.0)
 
@@ -631,17 +633,21 @@ class Bot:
 
     async def start(self) -> None:
         """启动 Bot。"""
+        from config import setup_logging
+        setup_logging()
+
         Path(config.WORKSPACE_DIR).mkdir(parents=True, exist_ok=True)
         Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
 
         state_store.load()
-        print(f"[bot] state loaded: chat_id={state_store.state.chat_id}, "
-              f"active_conv_id={state_store.state.active_conv_id}")
+        log.info("state loaded: chat_id=%s, active_conv_id=%s",
+                 state_store.state.chat_id, state_store.state.active_conv_id)
 
         conv_store.load(active_conv_id=state_store.state.active_conv_id)
         conv_store.ensure_default()
-        print(f"[bot] conversations loaded: {len(conv_store.list_all())} convs, "
-              f"active={conv_store.active.id if conv_store.active else None}")
+        log.info("conversations loaded: %d convs, active=%s",
+                 len(conv_store.list_all()),
+                 conv_store.active.id if conv_store.active else None)
 
         if conv_store.active:
             state_store.update(active_conv_id=conv_store.active.id)
@@ -656,7 +662,7 @@ class Bot:
 
     async def shutdown(self) -> None:
         """关闭 Bot。"""
-        print("[bot] shutting down...")
+        log.info("shutting down...")
         await self.stop_claude()
         await self.feishu.close()
 
@@ -671,3 +677,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

@@ -17,6 +17,8 @@ from feishu_client import FeishuClient
 from claude_runner import run_claude
 from conversations import conv_store
 from history_store import history_store
+import logging
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import asyncio.subprocess
@@ -84,14 +86,14 @@ async def run_claude_and_stream(
                 await asyncio.sleep(1.0)
                 success = await feishu.update_card(msg_id, card_json)
             if not success:
-                print(f"[stream_handler] update_card failed for msg_id={msg_id[:20]}..., force={force}")
+                log.error(f"update_card failed for msg_id={msg_id[:20]}..., force={force}")
                 if force:
                     new_id = await feishu.reply_message(user_message_id, card_json)
                     if new_id:
                         current_msg_id[0] = new_id
                         last_msg_update[0] = time.monotonic()
                     else:
-                        print(f"[stream_handler] fallback reply_message also failed")
+                        log.error(f"fallback reply_message also failed")
 
     # ── 思考计时器 ──────────────────────────────────────────────────────
     async def _thinking_ticker():
@@ -133,7 +135,7 @@ async def run_claude_and_stream(
                 )
             # 如果 reply_message 失败，用原始 user_message_id 作为 fallback
             if not new_card:
-                print(f"[stream_handler] new_round: reply_message failed, using fallback")
+                log.error(f"new_round: reply_message failed, using fallback")
                 new_card = await feishu.reply_message(
                     user_message_id,
                     FeishuClient.build_card("⏳ 正在处理新消息...")
@@ -150,7 +152,7 @@ async def run_claude_and_stream(
                 text_started[0] = False
                 got_result[0] = False
             else:
-                print(f"[stream_handler] new_round: FAILED to create card, keeping old card")
+                log.error(f"new_round: FAILED to create card, keeping old card")
 
         elif entry_type == "session_init":
             new_sid = entry.get("session_id")
@@ -158,7 +160,7 @@ async def run_claude_and_stream(
                 active = conv_store.active
                 if active:
                     conv_store.update(active.id, session_id=new_sid)
-                    print(f"[stream_handler] session_id saved to conv {active.id}: {new_sid}")
+                    log.info(f"session_id saved to conv {active.id}: {new_sid}")
 
         elif entry_type == "text":
             chunk = entry.get("text", "")
@@ -225,14 +227,14 @@ async def run_claude_and_stream(
             # Claude stderr → 记录日志；检测网络错误关键词
             text = entry.get("text", "")
             if text:
-                print(f"[stream_handler] claude stderr: {text[:200]}")
+                log.info(f"claude stderr: {text[:200]}")
             # 检测网络相关错误
             if text:
                 net_keywords = ["ETIMEDOUT", "ECONNREFUSED", "ECONNRESET", "ENOTFOUND",
                                "Network", "network", "timeout", "Timeout", "connect",
                                "DNS", "TLS", "SSL", "socket", "getaddrinfo"]
                 if any(kw in text for kw in net_keywords):
-                    print(f"[stream_handler] ⚠️ network error detected in stderr!")
+                    log.error(f"⚠️ network error detected in stderr!")
                     got_result[0] = True  # 阻止 finally 再发（无输出）卡片
                     await _throttled_update(
                         current_msg_id[0],
@@ -244,7 +246,7 @@ async def run_claude_and_stream(
             # _stdin_close_checker 超时：Claude 超过 10 分钟无 result
             sec = entry.get("seconds", 600)
             mins = int(sec / 60)
-            print(f"[stream_handler] TIMEOUT: no result for {sec}s, likely network issue or API hang")
+            log.error(f"TIMEOUT: no result for {sec}s, likely network issue or API hang")
             got_result[0] = True  # 阻止 finally 再发卡片
             await _throttled_update(
                 current_msg_id[0],
@@ -261,9 +263,9 @@ async def run_claude_and_stream(
             # system 消息（非 init）记录到日志
             text = entry.get("text", "")
             if text:
-                print(f"[stream_handler] claude system: {text[:200]}")
+                log.info(f"claude system: {text[:200]}")
 
-    print(f"[stream_handler] claude START: {text[:50]!r}")
+    log.info(f"claude START: {text[:50]!r}")
     try:
         await run_claude(
             prompt=text,
@@ -275,12 +277,12 @@ async def run_claude_and_stream(
             on_stdin_close=on_stdin_close,
         )
     except asyncio.CancelledError:
-        print("[stream_handler] claude CANCELLED")
+        log.warning("claude CANCELLED")
     except Exception as e:
         buf.append(f"\n\n❌ 执行出错：{e}")
-        print(f"[stream_handler] claude ERROR: {e}")
+        log.error(f"claude ERROR: {e}")
     finally:
-        print(f"[stream_handler] claude DONE, buf_len={len(buf)}")
+        log.info(f"claude DONE, buf_len={len(buf)}")
         ticker.cancel()
         try:
             await ticker
@@ -296,3 +298,4 @@ async def run_claude_and_stream(
                 await _throttled_update(current_msg_id[0], "（无输出）", force=True)
 
         on_proc(None)
+

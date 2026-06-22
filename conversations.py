@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Optional
 
 from config import config
+import logging
+log = logging.getLogger(__name__)
 
 
 def _uid() -> str:
@@ -74,7 +76,7 @@ class ConversationStore:
                 for item in raw
             ]
         except Exception as e:
-            print(f"[conversations] load failed: {e}")
+            log.error(f"load failed: {e}")
             self._convs = []
 
     def save(self) -> None:
@@ -88,7 +90,7 @@ class ConversationStore:
             )
             tmp.rename(self._path)
         except Exception as e:
-            print(f"[conversations] save failed: {e}")
+            log.error(f"save failed: {e}")
             try:
                 tmp.unlink(missing_ok=True)
             except Exception:
@@ -204,3 +206,4 @@ class ConversationStore:
 
 # 单例
 conv_store = ConversationStore()
+
