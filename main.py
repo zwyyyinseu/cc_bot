@@ -359,6 +359,72 @@ class Bot:
             FeishuClient.build_card("\n".join(lines))
         )
 
+    async def _route_command(self, stripped: str, msg_id: str) -> bool:
+        """命令路由表。返回 True 表示已处理（调用方应 return），False 表示非命令。"""
+        # ── 无参数命令（精确匹配） ──────────────────────────────────────
+        EXACT = {
+            "/list": self._cmd_list,
+            "/ls": self._cmd_list,
+            "/stop": self._cmd_stop,
+            "/start": self._cmd_start,
+            "/status": self._cmd_status,
+            "/stat": self._cmd_status,
+            "/help": self._cmd_help,
+            "/h": self._cmd_help,
+            "/?": self._cmd_help,
+        }
+        handler = EXACT.get(stripped)
+        if handler:
+            await handler(msg_id)
+            return True
+
+        # ── 带参数命令（前缀匹配 + 自动提取参数） ────────────────────────
+        PREFIX = {
+            "/new":     (4, self._cmd_new),
+            "/rename":  (7, self._cmd_rename),
+            "/switch":  (7, self._cmd_switch),
+            "/del":     (4, self._cmd_del),
+            "/history": (8, None),  # None = 特殊处理
+        }
+        for prefix, (plen, handler) in PREFIX.items():
+            if stripped.startswith(prefix):
+                arg = stripped[plen:].strip()
+                if handler is None:  # /history 特殊：解析数字参数
+                    n = 10
+                    if arg:
+                        try:
+                            n = int(arg)
+                            n = min(max(n, 1), 20)
+                        except ValueError:
+                            await self.feishu.reply_message(
+                                msg_id,
+                                FeishuClient.build_card("❌ 参数必须是数字，如 `/history 10`")
+                            )
+                            return True
+                    await self._cmd_history(msg_id, n)
+                    return True
+                # /switch 和 /del 需要参数
+                if prefix in ("/switch", "/del") and not arg:
+                    await self.feishu.reply_message(
+                        msg_id,
+                        FeishuClient.build_card(f"❌ 请指定序号，如 `{prefix} 1`\n\n发送 `/list` 查看所有对话")
+                    )
+                    return True
+                # /new 允许无参数（默认"新对话"）
+                if prefix == "/new" and not arg:
+                    arg = "新对话"
+                await handler(msg_id, arg)
+                return True
+
+        return False
+
+    async def _cmd_start(self, msg_id: str) -> None:
+        """/start 命令：已在活跃状态时提示。"""
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card("🟢 Bot 已在活跃状态，直接发消息即可。")
+        )
+
     # ── 消息处理 ────────────────────────────────────────────────────────
 
     async def _handle_message(self, msg: dict) -> None:
@@ -443,76 +509,7 @@ class Bot:
                 return
 
         # ── 命令路由 ─────────────────────────────────────────────────
-
-        if stripped in ("/list", "/ls"):
-            await self._cmd_list(msg_id)
-            return
-
-        if stripped.startswith("/new"):
-            title = stripped[4:].strip() or "新对话"
-            await self._cmd_new(msg_id, title)
-            return
-
-        if stripped.startswith("/rename"):
-            new_title = stripped[7:].strip()
-            await self._cmd_rename(msg_id, new_title)
-            return
-
-        if stripped.startswith("/switch"):
-            index_str = stripped[7:].strip()
-            if not index_str:
-                await self.feishu.reply_message(
-                    msg_id,
-                    FeishuClient.build_card("❌ 请指定序号，如 `/switch 1`\n\n发送 `/list` 查看所有对话")
-                )
-                return
-            await self._cmd_switch(msg_id, index_str)
-            return
-
-        if stripped.startswith("/del"):
-            index_str = stripped[4:].strip()
-            if not index_str:
-                await self.feishu.reply_message(
-                    msg_id,
-                    FeishuClient.build_card("❌ 请指定序号，如 `/del 1`\n\n发送 `/list` 查看所有对话")
-                )
-                return
-            await self._cmd_del(msg_id, index_str)
-            return
-
-        if stripped == "/stop":
-            await self._cmd_stop(msg_id)
-            return
-
-        if stripped == "/start":
-            await self.feishu.reply_message(
-                msg_id,
-                FeishuClient.build_card("🟢 Bot 已在活跃状态，直接发消息即可。")
-            )
-            return
-
-        if stripped in ("/status", "/stat"):
-            await self._cmd_status(msg_id)
-            return
-
-        if stripped in ("/help", "/h", "/?"):
-            await self._cmd_help(msg_id)
-            return
-
-        if stripped.startswith("/history"):
-            parts = stripped.split(None, 1)
-            n = 10
-            if len(parts) > 1:
-                try:
-                    n = int(parts[1])
-                    n = min(max(n, 1), 20)
-                except ValueError:
-                    await self.feishu.reply_message(
-                        msg_id,
-                        FeishuClient.build_card("❌ 参数必须是数字，如 `/history 10`")
-                    )
-                    return
-            await self._cmd_history(msg_id, n)
+        if await self._route_command(stripped, msg_id):
             return
 
         # ── 执行 Claude ──────────────────────────────────────────────
