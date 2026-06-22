@@ -9,6 +9,7 @@ cc_bot 入口 —— asyncio 事件循环 + 消息轮询主循环。
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +31,10 @@ class Bot:
         self._message_queue: Optional[asyncio.Queue] = None
         # 对话 ID → message_queue 的映射，用于跨消息保持
         self._conv_queue: dict[str, asyncio.Queue] = {}
+        # 休眠/唤醒状态机
+        self._idle = True                # 启动默认休眠
+        self._last_active = time.monotonic()  # 最后一次用户交互时间
+        self._auto_idle_sec = 1800.0     # 30 分钟无消息自动休眠
 
     # ── Claude 进程生命周期 ─────────────────────────────────────────────
 
@@ -85,14 +90,15 @@ class Bot:
         """向用户发送 P2P 消息以发现 chat_id。"""
         print("[bot] discovering chat_id by sending P2P message to user...")
         card = FeishuClient.build_card(
-            "🟢 **Claude Vibecoding Bot 已上线**\n\n"
-            "直接发消息给我，即可开始对话！\n\n"
-            "**命令：**\n"
+            "😴 **Claude Bot 已就绪（休眠中）**\n\n"
+            "发送 **`/start`** 激活 Bot，即可开始对话！\n\n"
+            "**命令速查：**\n"
+            "• `/start` — 唤醒 Bot\n"
             "• `/new 标题` — 创建新对话\n"
             "• `/list` — 查看所有对话\n"
             "• `/switch 序号` — 切换对话\n"
-            "• `/del 序号` — 删除对话\n"
-            "• `/stop` — 终止当前任务"
+            "• `/history` — 查看历史\n"
+            "• `/stop` — 休眠 Bot"
         )
         msg_id = await self.feishu.send_message(
             receive_id=config.FEISHU_OPEN_ID,
@@ -220,17 +226,20 @@ class Bot:
         )
 
     async def _cmd_stop(self, msg_id: str) -> None:
-        """终止当前 Claude 进程。"""
+        """终止当前 Claude 进程，进入休眠模式。"""
         if self._is_claude_running():
             await self.stop_claude()
+            self._idle = True
+            print("[bot] STOPPED + entering idle")
             await self.feishu.reply_message(
                 msg_id,
-                FeishuClient.build_card("⛔ 当前任务已终止。")
+                FeishuClient.build_card("😴 **Bot 已休眠**\n\nClaude 进程已终止，发送 **`/start`** 唤醒。")
             )
         else:
+            self._idle = True
             await self.feishu.reply_message(
                 msg_id,
-                FeishuClient.build_card("ℹ️ 当前没有正在执行的任务。")
+                FeishuClient.build_card("😴 **Bot 已休眠**\n\n发送 **`/start`** 唤醒。")
             )
 
     async def _cmd_status(self, msg_id: str) -> None:
@@ -239,17 +248,22 @@ class Bot:
         active = conv_store.active
         active_title = active.title if active else "无"
 
+        mode_line = "😴 休眠中" if self._idle else "🟢 活跃"
+        poll_interval = 30.0 if self._idle else config.POLL_INTERVAL
+
         lines = [
             "📊 **Bot 状态**",
             "",
-            f"• Bot 运行中 ✅",
+            f"• 运行模式: {mode_line}",
             f"• Claude 进程: {'🟢 运行中' if claude_running else '⚫ 空闲'}",
             f"• 活跃对话: **{active_title}**",
             f"• 对话总数: {len(conv_store.list_all())}",
-            f"• 轮询间隔: {config.POLL_INTERVAL}s",
-            "",
-            "💡 发送 `/help` 查看所有命令",
+            f"• 轮询间隔: {poll_interval}s",
         ]
+        if self._idle:
+            lines.append("\n💡 发送 **`/start`** 唤醒 Bot")
+        else:
+            lines.append("\n💡 发送 `/help` 查看所有命令")
         await self.feishu.reply_message(
             msg_id,
             FeishuClient.build_card("\n".join(lines))
@@ -392,9 +406,41 @@ class Bot:
 
         print(f"[bot] handling message: {text[:80]!r}")
 
-        # ── 命令路由 ─────────────────────────────────────────────────
+        # 更新最后活跃时间
+        self._last_active = time.monotonic()
 
+        # ── 休眠模式：仅响应 /start ─────────────────────────────────
         stripped = text.strip()
+
+        if self._idle:
+            if stripped == "/start":
+                self._idle = False
+                self._last_active = time.monotonic()
+                print("[bot] ACTIVATED by /start")
+                await self.feishu.reply_message(
+                    msg_id,
+                    FeishuClient.build_card(
+                        "🟢 **Bot 已激活**\n\n"
+                        "开始对话吧！发送 `/help` 查看所有命令。\n"
+                        "发送 `/stop` 休眠。"
+                    )
+                )
+                return
+            elif stripped == "/status":
+                await self._cmd_status(msg_id)
+                return
+            elif stripped == "/help" or stripped == "/h":
+                await self._cmd_help(msg_id)
+                return
+            else:
+                # 休眠中非 /start 消息：提示唤醒
+                await self.feishu.reply_message(
+                    msg_id,
+                    FeishuClient.build_card("😴 **Bot 休眠中**\n\n发送 **`/start`** 唤醒我。")
+                )
+                return
+
+        # ── 命令路由 ─────────────────────────────────────────────────
 
         if stripped in ("/list", "/ls"):
             await self._cmd_list(msg_id)
@@ -434,6 +480,13 @@ class Bot:
 
         if stripped == "/stop":
             await self._cmd_stop(msg_id)
+            return
+
+        if stripped == "/start":
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("🟢 Bot 已在活跃状态，直接发消息即可。")
+            )
             return
 
         if stripped in ("/status", "/stat"):
@@ -515,21 +568,35 @@ class Bot:
     # ── 轮询主循环 ──────────────────────────────────────────────────────
 
     async def _poll_loop(self) -> None:
-        """每 POLL_INTERVAL 秒轮询飞书消息，连续错误时指数退避。"""
-        print("[bot] poll loop started")
+        """轮询飞书消息。休眠态 30s 间隔，活跃态 2s 间隔。活跃态 30min 无消息自动休眠。"""
+        IDLE_INTERVAL = 30.0  # 休眠态轮询间隔
+        print("[bot] poll loop started (idle mode)")
         err_count = 0
         while True:
-            sleep_time = config.POLL_INTERVAL
+            # 动态间隔：休眠 30s，活跃 2s
+            base_interval = IDLE_INTERVAL if self._idle else config.POLL_INTERVAL
+            sleep_time = base_interval
+
+            # 活跃态自动休眠检测
+            if not self._idle:
+                idle_sec = time.monotonic() - self._last_active
+                if idle_sec > self._auto_idle_sec:
+                    print(f"[bot] auto-idle after {idle_sec:.0f}s inactive")
+                    if self._is_claude_running():
+                        await self.stop_claude()
+                    self._idle = True
+                    continue
+
             try:
                 chat_id = state_store.state.chat_id
                 if not chat_id:
-                    await asyncio.sleep(config.POLL_INTERVAL)
+                    await asyncio.sleep(base_interval)
                     continue
 
                 messages = await self.feishu.get_messages(chat_id)
                 if messages is None:  # API 错误 → 指数退避
                     err_count += 1
-                    sleep_time = min(config.POLL_INTERVAL * (2 ** min(err_count, 5)), 60.0)
+                    sleep_time = min(base_interval * (2 ** min(err_count, 5)), 60.0)
                     print(f"[bot] get_messages API error, backing off to {sleep_time}s (err_count={err_count})")
                 else:
                     err_count = 0  # 成功，重置计数
@@ -556,7 +623,7 @@ class Bot:
             except Exception as e:
                 print(f"[bot] poll loop error: {e}")
                 err_count += 1
-                sleep_time = min(config.POLL_INTERVAL * (2 ** min(err_count, 5)), 60.0)
+                sleep_time = min(base_interval * (2 ** min(err_count, 5)), 60.0)
 
             await asyncio.sleep(sleep_time)
 
