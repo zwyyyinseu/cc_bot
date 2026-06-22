@@ -62,6 +62,15 @@ class HistoryStore:
         try:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            # 超过 2 倍上限时截断，保留最近 MAX_LINES 条
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > config.HISTORY_FILE_MAX_LINES * 2:
+                path.write_text(
+                    "\n".join(lines[-config.HISTORY_FILE_MAX_LINES:]) + "\n",
+                    encoding="utf-8"
+                )
+                log.info("history truncated conv=%s: %d → %d lines",
+                         conv_id, len(lines), config.HISTORY_FILE_MAX_LINES)
         except Exception as e:
             log.error(f"append failed conv={conv_id}: {e}")
 

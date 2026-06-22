@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from config import config
@@ -39,11 +40,24 @@ def _tool_desc(name: str, inp: dict) -> str:
     return ""
 
 
-def _truncate_for_card(text: str, max_chars: int = config.CARD_MAX_CHARS) -> str:
-    """截断文本以适应飞书卡片大小限制。"""
+def _truncate_for_card(text: str, max_chars: int = config.CARD_MAX_CHARS,
+                      workspace: str = "") -> tuple[str, Optional[str]]:
+    """截断文本以适应飞书卡片大小限制。返回 (截断后文本, 完整文件路径或None)。"""
     if len(text) <= max_chars:
-        return text
-    return text[:max_chars - 20] + "\n\n...(内容过长，已截断)"
+        return text, None
+    # 保存完整输出到文件
+    saved_path = ""
+    if workspace:
+        ts = time.strftime("%m%d-%H%M%S")
+        out_file = Path(workspace) / f"output_{ts}.md"
+        try:
+            out_file.write_text(text, encoding="utf-8")
+            saved_path = str(out_file)
+            log.info("full output saved to %s", saved_path)
+        except Exception as e:
+            log.error("failed to save full output: %s", e)
+    truncated = text[:max_chars - 80] + f"\n\n---\n📄 完整输出已保存: `{saved_path}`" if saved_path else text[:max_chars - 20] + "\n\n...(内容过长，已截断)"
+    return truncated, saved_path
 
 
 async def run_claude_and_stream(
@@ -78,7 +92,8 @@ async def run_claude_and_stream(
         now = time.monotonic()
         if force or now - last_msg_update[0] >= config.THROTTLE_INTERVAL:
             last_msg_update[0] = now
-            card_json = FeishuClient.build_card(_truncate_for_card(content))
+            truncated, _ = _truncate_for_card(content, workspace=workspace)
+            card_json = FeishuClient.build_card(truncated)
             # 尝试更新，失败时重试一次（可能是 token 过期等瞬时错误）
             success = await feishu.update_card(msg_id, card_json)
             if not success:
