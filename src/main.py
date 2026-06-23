@@ -549,21 +549,36 @@ class Bot:
         import re
         doc_urls = re.findall(r'https?://[^\s]*feishu\.cn/(?:docx|wiki)/[^\s]+', text)
         doc_context = ""
+        doc_fetch_failed = False
         if doc_urls:
             for url in doc_urls:
                 log.info("detected feishu doc url: %s", url[:80])
                 doc = await self.feishu.fetch_document(url)
                 if doc:
-                    doc_context += f"\n\n---\n📄 文档《{doc['title']}》内容:\n{doc['content'][:8000]}\n---\n"
-                    # 通知用户已读取
+                    doc_context += f"\n\n---\n📄 飞书文档《{doc['title']}》内容:\n{doc['content'][:8000]}\n---\n"
                     await self.feishu.reply_message(
                         msg_id,
-                        FeishuClient.build_card(f"📄 已读取文档，正在分析...")
+                        FeishuClient.build_card(f"📄 已读取文档《{doc['title']}》，正在分析...")
                     )
+                else:
+                    doc_fetch_failed = True
+                    # 判断权限问题
+                    if "wiki" in url:
+                        hint = "❌ 无法读取知识库文档\n\n"
+                        hint += "请确保飞书应用已开通以下权限：\n"
+                        hint += "• `wiki:wiki:readonly` 或 `wiki:node:read`\n\n"
+                        hint += "👉 [开通权限](https://open.feishu.cn/app/cli_aabb9082f5f85bc0/auth)"
+                    else:
+                        hint = "❌ 无法读取飞书文档\n\n"
+                        hint += "请确保飞书应用已开通以下权限：\n"
+                        hint += "• `docx:document:readonly`\n\n"
+                        hint += "👉 [开通权限](https://open.feishu.cn/app/cli_aabb9082f5f85bc0/auth)"
+                    await self.feishu.reply_message(msg_id, FeishuClient.build_card(hint))
             if doc_context:
                 text = text + doc_context
-
-        # ── 执行 Claude ──────────────────────────────────────────────
+        # 拉取失败且没有内容 → 不发给 Claude，避免空请求
+        if doc_urls and doc_fetch_failed and not doc_context:
+            return
 
         async with self._run_lock:
             active = conv_store.ensure_default()
