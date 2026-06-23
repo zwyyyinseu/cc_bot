@@ -427,23 +427,61 @@ class Bot:
         )
 
     async def _cmd_view(self, msg_id: str, file_path: str) -> None:
-        """/view <路径> — 查看 workspace 下的文件，上传到飞书发送。"""
-        if not file_path:
-            await self.feishu.reply_message(
-                msg_id,
-                FeishuClient.build_card("❌ 请指定文件路径，如 `/view workspace/output_0601-143000.md`")
-            )
-            return
+        """/view [路径] — 查看文件。不带参数列出 workspace 下所有文件。"""
         from pathlib import Path
+
+        # 无参数：列出 workspace 文件
+        if not file_path:
+            ws = Path(config.WORKSPACE_DIR)
+            files = sorted(ws.rglob("*")) if ws.exists() else []
+            files = [f for f in files if f.is_file() and "__pycache__" not in str(f)]
+            if not files:
+                await self.feishu.reply_message(msg_id,
+                    FeishuClient.build_card("📭 workspace 下暂无文件"))
+                return
+            lines = ["📂 **workspace 文件列表**\n"]
+            for f in files[:30]:  # 最多显示 30 个
+                rel = f.relative_to(ws)
+                size = f.stat().st_size
+                size_str = f"{size/1024:.1f}K" if size > 1024 else f"{size}B"
+                lines.append(f"• `{rel}` ({size_str})")
+            if len(files) > 30:
+                lines.append(f"\n... 还有 {len(files) - 30} 个文件")
+            lines.append(f"\n💡 `/view 文件名` 查看具体文件")
+            await self.feishu.reply_message(msg_id, FeishuClient.build_card("\n".join(lines)))
+            return
+
         path = Path(file_path)
         if not path.is_absolute():
             path = Path(config.WORKSPACE_DIR) / file_path
-        if not path.exists():
-            await self.feishu.reply_message(
-                msg_id,
-                FeishuClient.build_card(f"❌ 文件不存在: `{file_path}`")
-            )
+
+        # 是目录 → 列出目录内容
+        if path.is_dir():
+            items = sorted(path.iterdir())
+            lines = [f"📁 **{file_path}**\n"]
+            for item in items[:30]:
+                icon = "📁" if item.is_dir() else "📄"
+                name = item.name
+                lines.append(f"{icon} `{name}`")
+            if len(items) > 30:
+                lines.append(f"\n... 还有 {len(items) - 30} 个")
+            await self.feishu.reply_message(msg_id, FeishuClient.build_card("\n".join(lines)))
             return
+
+        # 文件不存在 → 提示 + 列出同目录文件
+        if not path.exists():
+            parent = path.parent
+            hint = f"❌ 文件不存在: `{file_path}`\n"
+            if parent.exists():
+                siblings = sorted([f.name for f in parent.iterdir() if f.is_file()])[:15]
+                if siblings:
+                    hint += f"\n📁 `{parent.relative_to(Path(config.WORKSPACE_DIR)) if str(parent).startswith(config.WORKSPACE_DIR) else parent}` 下有以下文件:\n"
+                    for s in siblings:
+                        hint += f"• `{s}`\n"
+                    hint += "\n💡 试试 `/view 文件名`"
+            await self.feishu.reply_message(msg_id, FeishuClient.build_card(hint))
+            return
+
         # 上传并发送
         file_key = await self.feishu.upload_file(str(path))
         if not file_key:
