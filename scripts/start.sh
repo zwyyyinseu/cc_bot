@@ -3,9 +3,18 @@
 cd "$(dirname "$0")/.."   # 脚本在 scripts/ 下，回到项目根目录
 PROJECT_ROOT="$(pwd)"
 
-# 清理旧进程（排除当前脚本自己）
+# 清理旧进程
+# 1) 按 bot.pid 杀上一次的 bot 进程
+if [ -f bot.pid ]; then
+    OLD_PID=$(cat bot.pid)
+    kill "$OLD_PID" 2>/dev/null && echo "[watchdog] killed old bot PID=$OLD_PID"
+fi
+# 2) 杀其他可能残留的 main.py（排除即将启动的新进程）
+for pid in $(pgrep -f "main.py" 2>/dev/null); do
+    kill -9 "$pid" 2>/dev/null
+done
+# 3) 杀旧的 start.sh 看门狗（排除当前脚本自己）
 MYPID=$$
-pkill -9 -f "cc_bot.*main.py" 2>/dev/null
 for pid in $(pgrep -f "start.sh" 2>/dev/null); do
     [ "$pid" != "$MYPID" ] && kill -9 "$pid" 2>/dev/null
 done
