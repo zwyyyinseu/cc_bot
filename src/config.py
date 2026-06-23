@@ -75,7 +75,7 @@ class Config:
     CARD_MAX_CHARS: int = 4000
 
     # ── 休眠/唤醒 ──────────────────────────────────────────────────────
-    IDLE_POLL_INTERVAL: float = 30.0      # 休眠态轮询间隔（秒）
+    IDLE_POLL_INTERVAL: float = 10.0      # 休眠态轮询间隔（秒）
     AUTO_IDLE_SEC: float = 1800.0         # 活跃态无消息自动休眠（秒）
 
     # ── Claude 超时 ─────────────────────────────────────────────────────
