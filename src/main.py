@@ -430,35 +430,33 @@ class Bot:
         """/view [路径] — 查看文件。不带参数列出 workspace 下所有文件。"""
         from pathlib import Path
 
-        # 无参数：列出用户主 workspace 文件（cc_bot 上级目录）
+        # 无参数：列出主 workspace 目录树（限深度 2 层）
         if not file_path:
             main_ws = Path(config.WORKSPACE_DIR).parent.parent  # /home/zzzwy/workspace/
-            ws = Path(config.WORKSPACE_DIR)
-            # 优先显示主 workspace，cc_bot 自己的 workspace 作为补充
-            all_files = []
-            for d in [main_ws, ws]:
-                if d.exists():
-                    for f in sorted(d.rglob("*")):
-                        if f.is_file() and "__pycache__" not in str(f) and ".git/" not in str(f):
-                            all_files.append(f)
-            files = all_files
-            if not files:
+            if not main_ws.exists():
                 await self.feishu.reply_message(msg_id,
-                    FeishuClient.build_card("📭 workspace 下暂无文件"))
+                    FeishuClient.build_card("📭 workspace 不存在"))
                 return
-            lines = ["📂 **文件列表**\n"]
-            for f in files[:30]:
-                # 显示相对于主 workspace 或 cc_bot 的路径
-                try:
-                    rel = f.relative_to(main_ws)
-                except Exception:
-                    rel = f.relative_to(ws)
-                size = f.stat().st_size
-                size_str = f"{size/1024:.1f}K" if size > 1024 else f"{size}B"
-                lines.append(f"• `{rel}` ({size_str})")
-            if len(files) > 30:
-                lines.append(f"\n... 还有 {len(files) - 30} 个文件")
-            lines.append(f"\n💡 `/view 文件名` 查看具体文件")
+            # 构建目录树（深度 2 层，每目录最多 10 个子项）
+            SKIP_DIRS = {"__pycache__", ".git", "node_modules", ".claude", ".vscode"}
+            lines = ["📂 **workspace 目录**\n"]
+            for d in sorted(main_ws.iterdir()):
+                if d.name.startswith(".") or d.name in SKIP_DIRS:
+                    continue
+                if d.is_dir():
+                    children = sorted([c.name for c in d.iterdir()
+                                       if not c.name.startswith(".") and c.name not in SKIP_DIRS])[:10]
+                    extra = f" ... +{len(list(d.iterdir())) - 10}" if len(list(d.iterdir())) > 10 else ""
+                    lines.append(f"📁 **{d.name}/**")
+                    for c in children:
+                        cp = d / c
+                        icon = "📁" if cp.is_dir() else "📄"
+                        lines.append(f"    {icon} `{c}`")
+                    if extra:
+                        lines.append(f"    {extra}")
+                else:
+                    lines.append(f"📄 `{d.name}`")
+            lines.append(f"\n💡 `/view 目录名` 进入目录   `/view 文件名` 打开文件")
             await self.feishu.reply_message(msg_id, FeishuClient.build_card("\n".join(lines)))
             return
 

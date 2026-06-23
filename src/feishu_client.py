@@ -182,13 +182,20 @@ class FeishuClient:
         headers = {"Authorization": f"Bearer {token}"}
         url = f"{_BASE_URL}/im/v1/files"
 
+        # 飞书 API 对中文文件名兼容性差，用 ASCII 安全名称
+        original_name = path.name
+        safe_name = original_name.encode("ascii", errors="replace").decode("ascii")
+        # 如果原文件名全是中文等非 ASCII 字符，用扩展名保留类型识别
+        if safe_name.count("?") > len(safe_name) * 0.5:
+            safe_name = "file" + path.suffix
+
         with open(path, "rb") as f:
             files = {
-                "file": (path.name, f, "application/octet-stream"),
+                "file": (safe_name, f, "application/octet-stream"),
             }
             data = {
                 "file_type": file_type,
-                "file_name": path.name,
+                "file_name": safe_name,
             }
             try:
                 resp = await self._client.post(
