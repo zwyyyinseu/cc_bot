@@ -12,3 +12,4 @@ bot.pid
 # Python
 __pycache__/
 *.pyc
+.watchdog.lock
