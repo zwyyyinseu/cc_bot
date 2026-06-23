@@ -384,6 +384,7 @@ class Bot:
             "/rename":  (7, self._cmd_rename),
             "/switch":  (7, self._cmd_switch),
             "/del":     (4, self._cmd_del),
+            "/view":    (5, self._cmd_view),
             "/history": (8, None),  # None = 特殊处理
         }
         for prefix, (plen, handler) in PREFIX.items():
@@ -423,6 +424,38 @@ class Bot:
         await self.feishu.reply_message(
             msg_id,
             FeishuClient.build_card("🟢 Bot 已在活跃状态，直接发消息即可。")
+        )
+
+    async def _cmd_view(self, msg_id: str, file_path: str) -> None:
+        """/view <路径> — 查看 workspace 下的文件，上传到飞书发送。"""
+        if not file_path:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("❌ 请指定文件路径，如 `/view workspace/output_0601-143000.md`")
+            )
+            return
+        from pathlib import Path
+        path = Path(file_path)
+        if not path.is_absolute():
+            path = Path(config.WORKSPACE_DIR) / file_path
+        if not path.exists():
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card(f"❌ 文件不存在: `{file_path}`")
+            )
+            return
+        # 上传并发送
+        file_key = await self.feishu.upload_file(str(path))
+        if not file_key:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card(f"❌ 文件上传失败: `{path.name}`")
+            )
+            return
+        await self.feishu.reply_file(msg_id, file_key)
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card(f"📄 `{path.name}` — 点击上方文件预览")
         )
 
     # ── 消息处理 ────────────────────────────────────────────────────────

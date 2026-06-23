@@ -92,7 +92,7 @@ async def run_claude_and_stream(
         now = time.monotonic()
         if force or now - last_msg_update[0] >= config.THROTTLE_INTERVAL:
             last_msg_update[0] = now
-            truncated, _ = _truncate_for_card(content, workspace=workspace)
+            truncated, saved_path = _truncate_for_card(content, workspace=workspace)
             card_json = FeishuClient.build_card(truncated)
             # 尝试更新，失败时重试一次（可能是 token 过期等瞬时错误）
             success = await feishu.update_card(msg_id, card_json)
@@ -109,6 +109,12 @@ async def run_claude_and_stream(
                         last_msg_update[0] = time.monotonic()
                     else:
                         log.error(f"fallback reply_message also failed")
+            # 文件截断保存时，上传到飞书让用户可在手机端打开
+            if saved_path and force:
+                file_key = await feishu.upload_file(saved_path)
+                if file_key:
+                    await feishu.reply_file(user_message_id, file_key)
+                    log.info("file sent to chat: %s", saved_path)
 
     # ── 思考计时器 ──────────────────────────────────────────────────────
     async def _thinking_ticker():

@@ -159,6 +159,68 @@ class FeishuClient:
             return None
         return data.get("data", {}).get("message_id")
 
+    # ── 文件上传 ────────────────────────────────────────────────────────────
+
+    async def upload_file(self, file_path: str) -> Optional[str]:
+        """上传文件到飞书，返回 file_key。支持 md/pdf/txt 等格式。"""
+        from pathlib import Path
+        path = Path(file_path)
+        if not path.exists():
+            log.error("upload_file: file not found: %s", file_path)
+            return None
+
+        # 根据扩展名推测文件类型
+        ext = path.suffix.lower()
+        type_map = {
+            ".md": "markdown", ".pdf": "pdf", ".txt": "plain_text",
+            ".py": "plain_text", ".json": "plain_text", ".log": "plain_text",
+            ".csv": "plain_text", ".html": "html", ".xml": "xml",
+        }
+        file_type = type_map.get(ext, "stream")
+
+        token = await self._ensure_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        url = f"{_BASE_URL}/im/v1/files"
+
+        with open(path, "rb") as f:
+            files = {
+                "file": (path.name, f, "application/octet-stream"),
+            }
+            data = {
+                "file_type": file_type,
+                "file_name": path.name,
+            }
+            try:
+                resp = await self._client.post(
+                    url, headers=headers, data=data, files=files,
+                    timeout=60.0,
+                )
+            except Exception as e:
+                log.error("upload_file request failed: %s", e)
+                return None
+
+        body = resp.json()
+        if body.get("code") != 0:
+            log.error("upload_file failed: code=%s msg=%s", body.get("code"), body.get("msg"))
+            return None
+        file_key = body.get("data", {}).get("file_key")
+        log.info("file uploaded: %s → %s", path.name, file_key)
+        return file_key
+
+    async def reply_file(self, message_id: str, file_key: str) -> Optional[str]:
+        """回复文件消息到指定消息，返回消息 ID。手机端可直接点击预览。"""
+        content = json.dumps({"file_key": file_key})
+        resp = await self._request(
+            "POST",
+            f"{_BASE_URL}/im/v1/messages/{message_id}/reply",
+            json={"msg_type": "file", "content": content},
+        )
+        data = resp.json()
+        if data.get("code") != 0:
+            log.error("reply_file failed: code=%s msg=%s", data.get("code"), data.get("msg"))
+            return None
+        return data.get("data", {}).get("message_id")
+
     # ── 卡片构建 ────────────────────────────────────────────────────────────
 
     @staticmethod

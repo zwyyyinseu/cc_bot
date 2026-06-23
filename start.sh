@@ -3,7 +3,8 @@
 cd "$(dirname "$0")"
 
 # 清理旧进程（防止多进程累积导致重复回复）
-pkill -9 -f "main.py" 2>/dev/null
+pkill -9 -f "cc_bot/main.py" 2>/dev/null
+pkill -9 -f "cc_bot/start.sh" 2>/dev/null
 sleep 1
 
 # 确保目录存在
