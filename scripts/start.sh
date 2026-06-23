@@ -1,16 +1,17 @@
 #!/bin/bash
 # 启动 cc_bot（带崩溃自恢复，每天最多重启 3 次）
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."   # 脚本在 scripts/ 下，回到项目根目录
+PROJECT_ROOT="$(pwd)"
 
-# 清理旧进程（防止多进程累积导致重复回复）
-pkill -9 -f "cc_bot/main.py" 2>/dev/null
-pkill -9 -f "cc_bot/start.sh" 2>/dev/null
+# 清理旧进程
+pkill -9 -f "cc_bot/.*main.py" 2>/dev/null
+pkill -9 -f "cc_bot/.*start.sh" 2>/dev/null
 sleep 1
 
 # 确保目录存在
 mkdir -p data workspace
 
-# 清空旧日志，-u 禁用输出缓冲
+# 清空旧日志
 > bot.log
 
 # ── 看门狗循环 ──────────────────────────────────────────────────────
@@ -19,10 +20,13 @@ RESTART_COUNT=0
 LAST_RESTART_DATE=$(date +%Y%m%d)
 
 while true; do
-    nohup python3 -u main.py >> bot.log 2>&1 &
+    # 从 src/ 目录运行 main.py（让同级 imports 正常工作）
+    cd "$PROJECT_ROOT/src"
+    nohup python3 -u main.py >> "$PROJECT_ROOT/bot.log" 2>&1 &
     PID=$!
-    echo $PID > bot.pid
+    echo $PID > "$PROJECT_ROOT/bot.pid"
     echo "[watchdog] Bot 已启动 (PID: $PID, 今日重启: $RESTART_COUNT/$MAX_RESTARTS)"
+    cd "$PROJECT_ROOT"
 
     # 等待进程退出
     wait $PID 2>/dev/null

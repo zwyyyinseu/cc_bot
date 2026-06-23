@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_BASE_DIR = Path(__file__).resolve().parent
+_BASE_DIR = Path(__file__).resolve().parent.parent  # 项目根目录（src/ 的上级）
 
 # ── 日志 ──────────────────────────────────────────────────────────────────
 
