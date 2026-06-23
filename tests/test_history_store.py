@@ -8,6 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 # 将 cc_bot 加入 path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -97,15 +99,27 @@ def test_truncation():
 
 
 def test_import_from_claude():
-    """测试从 Claude session JSONL 文件导入（使用真实文件）。"""
+    """测试从 Claude session JSONL 文件导入。
+    如果有存在的 session 文件则用真实数据测试，否则跳过。
+    """
     from history_store import history_store, _claude_session_path
+    from pathlib import Path as P
     hs = history_store
-    # 使用已知存在的 session
-    workspace = "/home/zzzwy/workspace/cc_bot/workspace"
-    session_id = "f2bf0108-2c4a-4c37-a099-d347c04e4e04"
-    path = _claude_session_path(workspace, session_id)
-    if not path:
-        print("  (skip import test: session file not found)")
+    # 查找任意一个存在的 session 文件
+    projects_dir = P.home() / ".claude" / "projects"
+    session_path = None
+    workspace = ""
+    if projects_dir.exists():
+        for jsonl in projects_dir.glob("*/*.jsonl"):
+            if jsonl.stat().st_size > 1000:  # 至少有内容的文件
+                session_path = jsonl
+                session_id = jsonl.stem
+                # 反推 workspace 路径
+                proj_dir = jsonl.parent.name  # e.g. "-home-zzzwy-workspace-cc_bot-workspace"
+                workspace = "/" + proj_dir.lstrip("-").replace("-", "/")
+                break
+    if not session_path:
+        pytest.skip("no Claude session file found for import test")
         return
     hs.delete("test_import")
     imported = hs.import_from_claude("test_import", workspace, session_id)
