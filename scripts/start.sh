@@ -3,9 +3,12 @@
 cd "$(dirname "$0")/.."   # 脚本在 scripts/ 下，回到项目根目录
 PROJECT_ROOT="$(pwd)"
 
-# 清理旧进程
-pkill -9 -f "cc_bot/.*main.py" 2>/dev/null
-pkill -9 -f "cc_bot/.*start.sh" 2>/dev/null
+# 清理旧进程（排除当前脚本自己）
+MYPID=$$
+pkill -9 -f "cc_bot.*main.py" 2>/dev/null
+for pid in $(pgrep -f "start.sh" 2>/dev/null); do
+    [ "$pid" != "$MYPID" ] && kill -9 "$pid" 2>/dev/null
+done
 sleep 1
 
 # 确保目录存在
