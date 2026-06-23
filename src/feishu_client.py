@@ -221,6 +221,69 @@ class FeishuClient:
             return None
         return data.get("data", {}).get("message_id")
 
+    # ── 文档读取 ────────────────────────────────────────────────────────────
+
+    async def fetch_document(self, url: str) -> Optional[dict]:
+        """读取飞书文档/知识库内容。支持 docx 和 wiki 链接。
+        返回 {"title": str, "content": str} 或 None。
+        """
+        import re
+        token = None
+        doc_type = None
+
+        # 匹配 docx: https://xxx.feishu.cn/docx/TOKEN
+        m = re.search(r'feishu\.cn/docx/([A-Za-z0-9_]+)', url)
+        if m:
+            token = m.group(1)
+            doc_type = "docx"
+
+        # 匹配 wiki: https://xxx.feishu.cn/wiki/TOKEN
+        if not token:
+            m = re.search(r'feishu\.cn/wiki/([A-Za-z0-9_]+)', url)
+            if m:
+                token = m.group(1)
+                doc_type = "wiki"
+
+        if not token:
+            return None
+
+        try:
+            if doc_type == "docx":
+                resp = await self._request(
+                    "GET",
+                    f"{_BASE_URL}/docx/v1/documents/{token}/raw_content",
+                )
+                data = resp.json()
+                if data.get("code") != 0:
+                    log.error("fetch docx failed: code=%s msg=%s",
+                              data.get("code"), data.get("msg"))
+                    return None
+                content = data.get("data", {}).get("content", "")
+                title = token  # docx raw_content 不含标题，用 token 代替
+                return {"title": title, "content": content}
+
+            elif doc_type == "wiki":
+                # wiki 需要先获取节点信息
+                resp = await self._request(
+                    "GET",
+                    f"{_BASE_URL}/wiki/v2/spaces/get_node",
+                    params={"token": token},
+                )
+                data = resp.json()
+                if data.get("code") != 0:
+                    log.error("fetch wiki node failed: code=%s msg=%s",
+                              data.get("code"), data.get("msg"))
+                    return None
+                node = data.get("data", {}).get("node", {})
+                title = node.get("title", token)
+                # wiki 节点内容就是纯文本/markdown
+                content = node.get("content", "")
+                return {"title": title, "content": content}
+
+        except Exception as e:
+            log.error("fetch_document exception: %s", e)
+            return None
+
     # ── 卡片构建 ────────────────────────────────────────────────────────────
 
     @staticmethod

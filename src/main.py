@@ -545,6 +545,24 @@ class Bot:
         if await self._route_command(stripped, msg_id):
             return
 
+        # ── 飞书文档检测 ──────────────────────────────────────────────
+        import re
+        doc_urls = re.findall(r'https?://[^\s]*feishu\.cn/(?:docx|wiki)/[^\s]+', text)
+        doc_context = ""
+        if doc_urls:
+            for url in doc_urls:
+                log.info("detected feishu doc url: %s", url[:80])
+                doc = await self.feishu.fetch_document(url)
+                if doc:
+                    doc_context += f"\n\n---\n📄 文档《{doc['title']}》内容:\n{doc['content'][:8000]}\n---\n"
+                    # 通知用户已读取
+                    await self.feishu.reply_message(
+                        msg_id,
+                        FeishuClient.build_card(f"📄 已读取文档，正在分析...")
+                    )
+            if doc_context:
+                text = text + doc_context
+
         # ── 执行 Claude ──────────────────────────────────────────────
 
         async with self._run_lock:
