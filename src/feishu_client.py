@@ -276,8 +276,28 @@ class FeishuClient:
                     return None
                 node = data.get("data", {}).get("node", {})
                 title = node.get("title", token)
-                # wiki 节点内容就是纯文本/markdown
-                content = node.get("content", "")
+                obj_type = node.get("obj_type", "")
+                obj_token = node.get("obj_token", "")
+
+                # wiki 节点本身没有 content 字段，需要通过 obj_token 读取底层文档
+                content = ""
+                if obj_type == "docx" and obj_token:
+                    resp2 = await self._request(
+                        "GET",
+                        f"{_BASE_URL}/docx/v1/documents/{obj_token}/raw_content",
+                    )
+                    doc_data = resp2.json()
+                    if doc_data.get("code") == 0:
+                        content = doc_data.get("data", {}).get("content", "")
+                    else:
+                        log.error("fetch wiki docx content failed: code=%s msg=%s",
+                                  doc_data.get("code"), doc_data.get("msg"))
+                elif not obj_type:
+                    # 兜底：尝试直接读 node 的 content（旧版兼容）
+                    content = node.get("content", "")
+                else:
+                    log.warning("wiki node obj_type=%s not supported for content fetch", obj_type)
+
                 return {"title": title, "content": content}
 
         except Exception as e:
