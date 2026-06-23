@@ -169,12 +169,11 @@ class FeishuClient:
             log.error("upload_file: file not found: %s", file_path)
             return None
 
-        # 根据扩展名推测文件类型
+        # 飞书 file_type 只支持: opus mp4 pdf doc xls ppt stream
         ext = path.suffix.lower()
         type_map = {
-            ".md": "markdown", ".pdf": "pdf", ".txt": "plain_text",
-            ".py": "plain_text", ".json": "plain_text", ".log": "plain_text",
-            ".csv": "plain_text", ".html": "html", ".xml": "xml",
+            ".pdf": "pdf", ".doc": "doc", ".docx": "doc",
+            ".xls": "xls", ".xlsx": "xls", ".ppt": "ppt", ".pptx": "ppt",
         }
         file_type = type_map.get(ext, "stream")
 
@@ -190,16 +189,11 @@ class FeishuClient:
             safe_name = "file" + path.suffix
 
         with open(path, "rb") as f:
-            files = {
-                "file": (safe_name, f, "application/octet-stream"),
-            }
-            data = {
-                "file_type": file_type,
-                "file_name": safe_name,
-            }
             try:
                 resp = await self._client.post(
-                    url, headers=headers, data=data, files=files,
+                    url, headers=headers,
+                    data={"file_type": file_type, "file_name": safe_name},
+                    files={"file": (safe_name, f, "application/octet-stream")},
                     timeout=60.0,
                 )
             except Exception as e:
