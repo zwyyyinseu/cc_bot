@@ -29,15 +29,33 @@ from history_store import history_store
 def temp_data():
     """每个测试用临时目录，不污染真实 data/。"""
     tmp = tempfile.mkdtemp()
+    old_data_dir = config.DATA_DIR
+    old_conv_path = conv_store._path
+    old_state_path = state_store._path
+    old_history_base = history_store._base
+    old_convs = list(conv_store._convs)
+    old_active_id = conv_store._active_id
+    old_state = state_store._state
+
     config.DATA_DIR = tmp
-    # 重置单例状态（路径在 init 时已设定，需要手动更新）
     conv_store._convs = []
     conv_store._active_id = None
     conv_store._path = Path(tmp) / "conversations.json"
     state_store._state = State()
     state_store._path = Path(tmp) / "state.json"
     history_store._base = Path(tmp) / "history"
+
     yield tmp
+
+    # 恢复原始状态
+    config.DATA_DIR = old_data_dir
+    conv_store._path = old_conv_path
+    conv_store._convs = old_convs
+    conv_store._active_id = old_active_id
+    state_store._path = old_state_path
+    state_store._state = old_state
+    history_store._base = old_history_base
+
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)
 
