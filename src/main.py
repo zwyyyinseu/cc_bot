@@ -430,18 +430,29 @@ class Bot:
         """/view [路径] — 查看文件。不带参数列出 workspace 下所有文件。"""
         from pathlib import Path
 
-        # 无参数：列出 workspace 文件
+        # 无参数：列出用户主 workspace 文件（cc_bot 上级目录）
         if not file_path:
+            main_ws = Path(config.WORKSPACE_DIR).parent.parent  # /home/zzzwy/workspace/
             ws = Path(config.WORKSPACE_DIR)
-            files = sorted(ws.rglob("*")) if ws.exists() else []
-            files = [f for f in files if f.is_file() and "__pycache__" not in str(f)]
+            # 优先显示主 workspace，cc_bot 自己的 workspace 作为补充
+            all_files = []
+            for d in [main_ws, ws]:
+                if d.exists():
+                    for f in sorted(d.rglob("*")):
+                        if f.is_file() and "__pycache__" not in str(f) and ".git/" not in str(f):
+                            all_files.append(f)
+            files = all_files
             if not files:
                 await self.feishu.reply_message(msg_id,
                     FeishuClient.build_card("📭 workspace 下暂无文件"))
                 return
-            lines = ["📂 **workspace 文件列表**\n"]
-            for f in files[:30]:  # 最多显示 30 个
-                rel = f.relative_to(ws)
+            lines = ["📂 **文件列表**\n"]
+            for f in files[:30]:
+                # 显示相对于主 workspace 或 cc_bot 的路径
+                try:
+                    rel = f.relative_to(main_ws)
+                except Exception:
+                    rel = f.relative_to(ws)
                 size = f.stat().st_size
                 size_str = f"{size/1024:.1f}K" if size > 1024 else f"{size}B"
                 lines.append(f"• `{rel}` ({size_str})")
@@ -453,7 +464,13 @@ class Bot:
 
         path = Path(file_path)
         if not path.is_absolute():
+            # 先尝试 cc_bot workspace，再尝试用户主 workspace
             path = Path(config.WORKSPACE_DIR) / file_path
+            if not path.exists():
+                # 回退到用户主 workspace（cc_bot 的上级目录）
+                alt_path = Path(config.WORKSPACE_DIR).parent.parent / file_path
+                if alt_path.exists():
+                    path = alt_path
 
         # 是目录 → 列出目录内容
         if path.is_dir():
