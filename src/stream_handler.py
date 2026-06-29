@@ -238,7 +238,11 @@ async def run_claude_and_stream(
             final_text = "".join(buf)
             if final_text:
                 await _throttled_update(current_msg_id[0], final_text, force=True)
-            elif not tool_log and not text_started[0]:
+            elif tool_log:
+                # 有工具调用但没有文本输出 → 显示最后一个工具的状态
+                summary = "\n".join(tool_log).replace("结果分析中", "✅")
+                await _throttled_update(current_msg_id[0], summary, force=True)
+            elif not text_started[0]:
                 await _throttled_update(current_msg_id[0], "✅ 任务完成", force=True)
             # 推送通知：回复新消息触发手机推送（卡片更新不触发推送）
             cost_info = entry.get("cost_usd", "")
