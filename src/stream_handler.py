@@ -86,7 +86,6 @@ async def run_claude_and_stream(
     start_time = [time.monotonic()]      # 当前轮次的开始时间（new_round 时重置）
     got_result = [False]                 # 是否收到了 result 事件
     last_output_time = [time.monotonic()]  # 最后一次收到输出的时间（用于检测断网）
-    modified_files: set[str] = set()       # 本轮 Write/Edit 修改的文件路径
 
     async def _throttled_update(msg_id: str, content: str, force: bool = False) -> None:
         """节流更新：中间过程最少间隔 THROTTLE_INTERVAL 秒，force=True 时强制发送。"""
@@ -171,7 +170,6 @@ async def run_claude_and_stream(
                 buf.clear()
                 tool_log.clear()
                 history_buf.clear()  # 新一轮对话，重置历史缓冲
-                modified_files.clear()
                 text_started[0] = False
                 got_result[0] = False
             else:
@@ -198,14 +196,8 @@ async def run_claude_and_stream(
         elif entry_type == "tool_call":
             last_output_time[0] = time.monotonic()
             name = entry.get("name", "")
-            inp = entry.get("input", {})
-            desc = _tool_desc(name, inp)
+            desc = _tool_desc(name, entry.get("input", {}))
             line = f"🔧 {name}: {desc} 执行中" if desc else f"🔧 {name} 执行中"
-            # 跟踪 Write/Edit 修改的文件路径
-            if name in ("Write", "Edit", "NotebookEdit"):
-                fp = inp.get("file_path", inp.get("notebook_path", ""))
-                if fp:
-                    modified_files.add(fp)
 
             if text_started[0]:
                 final_text = "".join(buf)
@@ -248,20 +240,15 @@ async def run_claude_and_stream(
                 await _throttled_update(current_msg_id[0], final_text, force=True)
             elif not tool_log and not text_started[0]:
                 await _throttled_update(current_msg_id[0], "✅ 任务完成", force=True)
-            # ★ 推送通知：回复新消息触发手机推送（卡片更新不触发） ★
-            notify_text = "✅ 任务完成"
-            if modified_files:
-                notify_text += f"，已修改 {len(modified_files)} 个文件"
-            await feishu.reply_message(user_message_id, FeishuClient.build_card(notify_text))
-            # ★ 自动发送修改的文件到聊天 ★
-            for fp in list(modified_files):
-                file_key = await feishu.upload_file(fp)
-                if file_key:
-                    await feishu.reply_file(user_message_id, file_key)
-                    log.info("auto-sent file to chat: %s", fp)
+            # 推送通知：回复新消息触发手机推送（卡片更新不触发推送）
+            cost_info = entry.get("cost_usd", "")
+            cost_str = f" · ${cost_info:.4f}" if cost_info else ""
+            await feishu.reply_message(
+                user_message_id,
+                FeishuClient.build_card(f"✅ 任务完成{cost_str}")
+            )
             buf.clear()
             tool_log.clear()
-            modified_files.clear()
             text_started[0] = False
 
         elif entry_type == "stderr":
