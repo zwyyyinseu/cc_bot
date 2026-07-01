@@ -2,6 +2,8 @@
 
 在飞书手机上发消息，操控服务器上的 Claude Code 执行任务，结果流式回传。出差、躺床上、不在工位也能写代码。
 
+> [English README](README_EN.md)
+
 ## 能做什么
 
 - 手机上发消息 → 服务器 Claude CLI 执行 → 实时卡片流式回传
