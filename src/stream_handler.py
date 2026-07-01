@@ -54,10 +54,23 @@ def _truncate_for_card(text: str, max_chars: int = config.CARD_MAX_CHARS,
             out_file.write_text(text, encoding="utf-8")
             saved_path = str(out_file)
             log.info("full output saved to %s", saved_path)
+            _prune_output_files(workspace, keep=20)
         except Exception as e:
             log.error("failed to save full output: %s", e)
     truncated = text[:max_chars - 80] + f"\n\n---\n📄 完整输出已保存: `{saved_path}`" if saved_path else text[:max_chars - 20] + "\n\n...(内容过长，已截断)"
     return truncated, saved_path
+
+
+def _prune_output_files(workspace: str, keep: int = 20) -> None:
+    """清理旧的 output_*.md 文件，只保留最近 N 个。"""
+    try:
+        ws = Path(workspace)
+        outputs = sorted(ws.glob("output_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in outputs[keep:]:
+            old.unlink(missing_ok=True)
+            log.info("pruned old output: %s", old.name)
+    except Exception:
+        pass
 
 
 async def run_claude_and_stream(

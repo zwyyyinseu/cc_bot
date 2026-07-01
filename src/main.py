@@ -37,6 +37,7 @@ class Bot:
         self._idle = True                # 启动默认休眠
         self._last_active = time.monotonic()  # 最后一次用户交互时间
         self._auto_idle_sec = config.AUTO_IDLE_SEC  # 从配置读取
+        self._claude_available = False   # Claude CLI 是否可用（启动时检测）
 
     # ── Claude 进程生命周期 ─────────────────────────────────────────────
 
@@ -252,11 +253,13 @@ class Bot:
 
         mode_line = "😴 休眠中" if self._idle else "🟢 活跃"
         poll_interval = config.IDLE_POLL_INTERVAL if self._idle else config.POLL_INTERVAL
+        claude_status = "🟢 可用" if self._claude_available else "🔴 不可用"
 
         lines = [
             "📊 **Bot 状态**",
             "",
             f"• 运行模式: {mode_line}",
+            f"• Claude CLI: {claude_status}",
             f"• Claude 进程: {'🟢 运行中' if claude_running else '⚫ 空闲'}",
             f"• 活跃对话: **{active_title}**",
             f"• 对话总数: {len(conv_store.list_all())}",
@@ -757,6 +760,20 @@ class Bot:
 
         Path(config.WORKSPACE_DIR).mkdir(parents=True, exist_ok=True)
         Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
+
+        # 检测 Claude CLI 是否可用
+        from claude_runner import _find_claude_bin
+        import subprocess
+        claude_bin = _find_claude_bin()
+        try:
+            result = subprocess.run([claude_bin, "--version"], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                self._claude_available = True
+                log.info("claude CLI available: %s", result.stdout.strip()[:80])
+            else:
+                log.error("claude CLI check failed: %s", result.stderr.strip()[:200])
+        except Exception as e:
+            log.error("claude CLI not available: %s", e)
 
         state_store.load()
         log.info("state loaded: chat_id=%s, active_conv_id=%s",
