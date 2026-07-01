@@ -621,15 +621,19 @@ class Bot:
                     doc_fetch_failed = True
                     # 判断权限问题
                     if "wiki" in url:
-                        hint = "❌ 无法读取知识库文档\n\n"
-                        hint += "请确保飞书应用已开通以下权限：\n"
-                        hint += "• `wiki:wiki:readonly` 或 `wiki:node:read`\n\n"
-                        hint += "👉 [开通权限](https://open.feishu.cn/app/cli_aabb9082f5f85bc0/auth)"
+                        hint = (
+                            "❌ 无法读取知识库文档\n\n"
+                            "请确保飞书应用已开通以下权限：\n"
+                            "• `wiki:wiki:readonly` 或 `wiki:node:read`\n\n"
+                            "💡 在飞书开放平台 → 应用 → 权限管理 中添加"
+                        )
                     else:
-                        hint = "❌ 无法读取飞书文档\n\n"
-                        hint += "请确保飞书应用已开通以下权限：\n"
-                        hint += "• `docx:document:readonly`\n\n"
-                        hint += "👉 [开通权限](https://open.feishu.cn/app/cli_aabb9082f5f85bc0/auth)"
+                        hint = (
+                            "❌ 无法读取飞书文档\n\n"
+                            "请确保飞书应用已开通以下权限：\n"
+                            "• `docx:document:readonly`\n\n"
+                            "💡 在飞书开放平台 → 应用 → 权限管理 中添加"
+                        )
                     await self.feishu.reply_message(msg_id, FeishuClient.build_card(hint))
             if doc_context:
                 text = text + doc_context
