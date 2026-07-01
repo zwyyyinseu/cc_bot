@@ -59,6 +59,7 @@ cc_bot/
 ```bash
 git clone git@github.com:zwyyyinseu/cc_bot.git
 cd cc_bot
+pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env，填入你的飞书凭证
 vim .env

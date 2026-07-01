@@ -58,6 +58,7 @@ cc_bot/
 ```bash
 git clone git@github.com:zwyyyinseu/cc_bot.git
 cd cc_bot
+pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your Feishu credentials
 vim .env
