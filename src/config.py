@@ -86,6 +86,7 @@ class Config:
     HISTORY_DISPLAY_N: int = 10           # /history 默认显示条数
     HISTORY_DISPLAY_MAX: int = 20         # /history 最大显示条数
     HISTORY_FILE_MAX_LINES: int = 500     # 历史文件最大行数，超出时截断
+    HISTORY_FILE_MAX_BYTES: int = 2 * 1024 * 1024  # 历史文件最大字节数（2MB），超出时截断
 
 
 config = Config()

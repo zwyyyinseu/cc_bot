@@ -122,12 +122,14 @@ async def run_claude_and_stream(
         - < 60s: 正常等待
         - 60-120s: 提示复杂任务
         - > 120s: 提示可能网络异常
+        工具执行期间（tool_log 非空）也显示已执行时长。
         """
         icons = ["⏳", "🤔"]
         i = 0
         while True:
             await asyncio.sleep(5.0)
             if not tool_log and not buf and not text_started[0]:
+                # 还没有任何输出 —— 思考阶段
                 elapsed = int(time.monotonic() - start_time[0])
                 no_output_sec = int(time.monotonic() - last_output_time[0])
                 if no_output_sec > 120:
@@ -138,6 +140,15 @@ async def run_claude_and_stream(
                     hint = f"{icons[i % 2]} 正在思考... ({elapsed}s)"
                 await _throttled_update(current_msg_id[0], hint)
                 i += 1
+            elif tool_log and not text_started[0]:
+                # 工具执行中 —— 显示已执行时长
+                tool_elapsed = int(time.monotonic() - last_output_time[0])
+                if tool_elapsed >= 15:
+                    # 在最后一条工具日志后追加耗时
+                    display = "\n".join(tool_log)
+                    if "结果分析中" in (tool_log[-1] if tool_log else ""):
+                        display += f" ({tool_elapsed}s)"
+                    await _throttled_update(current_msg_id[0], display)
 
     ticker = asyncio.create_task(_thinking_ticker())
 

@@ -62,15 +62,23 @@ class HistoryStore:
         try:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            # 超过 2 倍上限时截断，保留最近 MAX_LINES 条
+            # 超过行数上限或文件大小上限时截断
             lines = path.read_text(encoding="utf-8").splitlines()
-            if len(lines) > config.HISTORY_FILE_MAX_LINES * 2:
+            file_size = path.stat().st_size
+            need_truncate = (
+                len(lines) > config.HISTORY_FILE_MAX_LINES * 2
+                or file_size > config.HISTORY_FILE_MAX_BYTES * 2
+            )
+            if need_truncate:
+                # 从后往前取，保留最近的内容
+                keep_lines = lines[-config.HISTORY_FILE_MAX_LINES:]
                 path.write_text(
-                    "\n".join(lines[-config.HISTORY_FILE_MAX_LINES:]) + "\n",
+                    "\n".join(keep_lines) + "\n",
                     encoding="utf-8"
                 )
-                log.info("history truncated conv=%s: %d → %d lines",
-                         conv_id, len(lines), config.HISTORY_FILE_MAX_LINES)
+                log.info("history truncated conv=%s: %d→%d lines, %d→%d bytes",
+                         conv_id, len(lines), len(keep_lines),
+                         file_size, path.stat().st_size)
         except Exception as e:
             log.error(f"append failed conv={conv_id}: {e}")
 
@@ -149,37 +157,42 @@ class HistoryStore:
                         continue
 
                     msg_type = obj.get("type", "")
-                    if msg_type == "user":
-                        # 提取用户消息文本
-                        content = obj.get("message", {}).get("content", [])
+                    # 跳过子代理的消息
+                    if obj.get("parentUuid") or obj.get("isSidechain"):
+                        continue
+                    message = obj.get("message", {})
+                    # message 可能是字符串（某些旧版/异常格式），跳过
+                    if not isinstance(message, dict):
+                        continue
+                    content = message.get("content", [])
+
+                    # content 可能是字符串（直接文本）或列表（content blocks）
+                    if isinstance(content, str):
+                        texts = [content.strip()]
+                    elif isinstance(content, list):
                         texts = []
                         for c in content:
-                            if c.get("type") == "text":
+                            if isinstance(c, dict) and c.get("type") == "text":
                                 t = c.get("text", "").strip()
                                 if t:
                                     texts.append(t)
-                        full_text = " ".join(texts)
-                        if full_text:
-                            ts = obj.get("timestamp", _now_iso())
-                            entries.append({"role": "user", "text": full_text, "timestamp": ts})
+                    else:
+                        continue
+
+                    full_text = " ".join(texts)
+                    if not full_text:
+                        continue
+
+                    if msg_type == "user":
+                        ts = obj.get("timestamp", _now_iso())
+                        entries.append({"role": "user", "text": full_text, "timestamp": ts})
 
                     elif msg_type == "assistant":
-                        # 跳过子代理的消息（有 parentUuid 关联到子代理 session）
-                        # 只取顶层 assistant 消息中的 text 块
-                        content = obj.get("message", {}).get("content", [])
-                        if not isinstance(content, list):
+                        # 跳过网络超时等错误占位
+                        if full_text in ("Request timed out",):
                             continue
-                        texts = []
-                        for c in content:
-                            if c.get("type") == "text":
-                                t = c.get("text", "").strip()
-                                # 跳过网络超时等错误占位
-                                if t and t not in ("Request timed out",):
-                                    texts.append(t)
-                        full_text = " ".join(texts)
-                        if full_text:
-                            ts = obj.get("timestamp", _now_iso())
-                            entries.append({"role": "assistant", "text": full_text, "timestamp": ts})
+                        ts = obj.get("timestamp", _now_iso())
+                        entries.append({"role": "assistant", "text": full_text, "timestamp": ts})
 
         except Exception as e:
             log.error(f"import failed conv={conv_id}: {e}")

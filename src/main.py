@@ -444,9 +444,10 @@ class Bot:
                 if d.name.startswith(".") or d.name in SKIP_DIRS:
                     continue
                 if d.is_dir():
-                    children = sorted([c.name for c in d.iterdir()
+                    all_children = list(d.iterdir())
+                    children = sorted([c.name for c in all_children
                                        if not c.name.startswith(".") and c.name not in SKIP_DIRS])[:10]
-                    extra = f" ... +{len(list(d.iterdir())) - 10}" if len(list(d.iterdir())) > 10 else ""
+                    extra = f" ... +{len(all_children) - 10}" if len(all_children) > 10 else ""
                     lines.append(f"📁 **{d.name}/**")
                     for c in children:
                         cp = d / c
@@ -695,15 +696,17 @@ class Bot:
             base_interval = IDLE_INTERVAL if self._idle else config.POLL_INTERVAL
             sleep_time = base_interval
 
-            # 活跃态自动休眠检测
+            # 活跃态自动休眠检测（Claude 运行中不自动休眠）
             if not self._idle:
                 idle_sec = time.monotonic() - self._last_active
                 if idle_sec > self._auto_idle_sec:
-                    log.info(f"auto-idle after {idle_sec:.0f}s inactive")
                     if self._is_claude_running():
-                        await self.stop_claude()
-                    self._idle = True
-                    continue
+                        log.info(f"auto-idle skipped: Claude still running after {idle_sec:.0f}s")
+                        self._last_active = time.monotonic()  # 重置计时，等 Claude 结束再判断
+                    else:
+                        log.info(f"auto-idle after {idle_sec:.0f}s inactive")
+                        self._idle = True
+                        continue
 
             try:
                 chat_id = state_store.state.chat_id

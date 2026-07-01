@@ -192,15 +192,31 @@ class ConversationStore:
         if not ordered:
             return "📭 暂无对话\n\n💡 发送 `/new 标题` 创建新对话"
 
+        # 检查 session 文件是否实际存在
+        def _session_status(conv: Conversation) -> str:
+            if not conv.session_id:
+                return "🆕"
+            sanitized = conv.workspace.replace("/", "-")
+            session_file = Path.home() / ".claude" / "projects" / sanitized / f"{conv.session_id}.jsonl"
+            if session_file.exists():
+                return "💾"
+            # 全局搜索
+            projects_dir = Path.home() / ".claude" / "projects"
+            if projects_dir.exists():
+                for _ in projects_dir.glob(f"*/{conv.session_id}.jsonl"):
+                    return "💾"
+            return "⚠️"
+
         lines = [f"📑 **对话列表**（共 {len(ordered)} 个）\n"]
         for i, conv in enumerate(ordered, 1):
             active_marker = " ▸ " if conv.id == self._active_id else "   "
             active_tag = " **[活跃]**" if conv.id == self._active_id else ""
             time_ago = _time_ago(conv.updated_at)
-            sid_status = "✓" if conv.session_id else "○"
+            sid_status = _session_status(conv)
             lines.append(f"{active_marker}{i}. **{conv.title}**{active_tag}  {sid_status} {time_ago}")
 
         lines.append("\n💡 `/switch 序号` 切换  `/del 序号` 删除  `/new 标题` 新建")
+        lines.append("\n💾=有上下文  🆕=新对话  ⚠️=上下文丢失")
         return "\n".join(lines)
 
 

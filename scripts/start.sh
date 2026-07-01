@@ -28,7 +28,7 @@ sleep 1
 mkdir -p data workspace
 
 # ── 看门狗循环 ────────────────────────────────────────────────────
-MAX_RESTARTS=3
+MAX_RESTARTS=10
 RESTART_COUNT=0
 LAST_DATE=$(date +%Y%m%d)
 

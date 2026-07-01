@@ -324,7 +324,7 @@ def test_config_dataclass_fields():
         "WORKSPACE_DIR", "DATA_DIR", "CARD_MAX_CHARS",
         "IDLE_POLL_INTERVAL", "AUTO_IDLE_SEC", "RESULT_TIMEOUT",
         "HISTORY_MAX_CHARS", "HISTORY_DISPLAY_N", "HISTORY_DISPLAY_MAX",
-        "HISTORY_FILE_MAX_LINES",
+        "HISTORY_FILE_MAX_LINES", "HISTORY_FILE_MAX_BYTES",
     }
     missing = required - fields
     assert not missing, f"Missing config fields: {missing}"
