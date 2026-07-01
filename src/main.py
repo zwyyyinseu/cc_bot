@@ -435,7 +435,8 @@ class Bot:
 
         # 无参数：列出主 workspace 目录树（限深度 2 层）
         if not file_path:
-            main_ws = Path(config.WORKSPACE_DIR).parent.parent  # /home/zzzwy/workspace/
+            # WORKSPACE_DIR 是 cc_bot/workspace/，.parent.parent 回到项目根目录的上级
+            main_ws = Path(config.WORKSPACE_DIR).parent.parent
             if not main_ws.exists():
                 await self.feishu.reply_message(msg_id,
                     FeishuClient.build_card("📭 workspace 不存在"))
