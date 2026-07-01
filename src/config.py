@@ -16,7 +16,7 @@ _BASE_DIR = Path(__file__).resolve().parent.parent  # 项目根目录（src/ 的
 def setup_logging(level: int = logging.INFO) -> None:
     """配置全局日志：输出到 stderr（start.sh 将 stderr 重定向到 bot.log）。"""
     fmt = logging.Formatter(
-        "[%(name)s] %(message)s", datefmt="%m-%d %H:%M:%S"
+        "%(asctime)s [%(name)s] %(message)s", datefmt="%m-%d %H:%M:%S"
     )
     sh = logging.StreamHandler()
     sh.setFormatter(fmt)
