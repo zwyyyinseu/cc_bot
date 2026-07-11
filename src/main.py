@@ -465,15 +465,38 @@ class Bot:
             await self.feishu.reply_message(msg_id, FeishuClient.build_card("\n".join(lines)))
             return
 
+        # 定义允许访问的目录范围
+        ALLOWED_ROOTS = [
+            Path(config.WORKSPACE_DIR).resolve(),
+            Path(config.WORKSPACE_DIR).parent.parent.resolve(),
+        ]
+
         path = Path(file_path)
         if not path.is_absolute():
             # 先尝试 cc_bot workspace，再尝试用户主 workspace
-            path = Path(config.WORKSPACE_DIR) / file_path
+            path = (Path(config.WORKSPACE_DIR) / file_path).resolve()
             if not path.exists():
-                # 回退到用户主 workspace（cc_bot 的上级目录）
-                alt_path = Path(config.WORKSPACE_DIR).parent.parent / file_path
+                alt_path = (Path(config.WORKSPACE_DIR).parent.parent / file_path).resolve()
                 if alt_path.exists():
                     path = alt_path
+        else:
+            path = path.resolve()
+
+        # 安全检查：禁止通过 ../ 等方式跳出允许的目录范围
+        allowed = False
+        for root in ALLOWED_ROOTS:
+            try:
+                path.relative_to(root)
+                allowed = True
+                break
+            except ValueError:
+                continue
+        if not allowed:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("🔒 **访问被拒绝**\n\n该路径不在允许的目录范围内。")
+            )
+            return
 
         # 是目录 → 列出目录内容
         if path.is_dir():
