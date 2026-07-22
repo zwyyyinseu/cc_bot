@@ -99,6 +99,60 @@ class CostTracker:
         except Exception:
             return 0
 
+    # ── 历史导入 ──────────────────────────────────────────────────────────
+
+    def import_history(self) -> int:
+        """从 Claude session JSONL 文件中导入历史花费记录。
+        扫描 ~/.claude/projects/ 下所有 session 文件，
+        提取 result 事件中的 cost_usd。
+        只在 costs.jsonl 不存在或为空时执行。
+        返回导入的记录数。
+        """
+        # 已有记录则跳过
+        if self._path.exists() and self._path.stat().st_size > 0:
+            return 0
+
+        projects_dir = Path.home() / ".claude" / "projects"
+        if not projects_dir.exists():
+            return 0
+
+        imported = 0
+        for jsonl in projects_dir.glob("*/*.jsonl"):
+            try:
+                for line in jsonl.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if obj.get("type") == "result":
+                        cost = obj.get("cost_usd", 0)
+                        if cost and cost > 0:
+                            ts = obj.get("timestamp", _now_iso())
+                            self._write_entry({
+                                "conv_id": jsonl.stem,
+                                "cost_usd": cost,
+                                "timestamp": ts,
+                            })
+                            imported += 1
+            except Exception as e:
+                log.warning(f"import skipped {jsonl.name}: {e}")
+
+        if imported:
+            log.info(f"cost import: {imported} records from session files")
+        return imported
+
+    def _write_entry(self, entry: dict) -> None:
+        """内部写入方法，绕过 record 的重复检查。"""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.error(f"cost write failed: {e}")
+
 
 # 单例
 cost_tracker = CostTracker()

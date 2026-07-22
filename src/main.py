@@ -833,6 +833,11 @@ class Bot:
         except Exception as e:
             log.error("claude CLI not available: %s", e)
 
+        # 从历史 session 文件导入花费记录（仅首次）
+        imported_costs = cost_tracker.import_history()
+        if imported_costs:
+            log.info(f"imported {imported_costs} historical cost records")
+
         state_store.load()
         log.info("state loaded: chat_id=%s, active_conv_id=%s",
                  state_store.state.chat_id, state_store.state.active_conv_id)
