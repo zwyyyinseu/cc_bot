@@ -19,6 +19,7 @@ from feishu_client import FeishuClient
 from conversations import conv_store
 from stream_handler import run_claude_and_stream
 from history_store import history_store
+from cost_tracker import cost_tracker
 import logging
 log = logging.getLogger(__name__)
 
@@ -290,12 +291,37 @@ class Bot:
             "• `/stop` — 终止当前 Claude 任务",
             "• `/history` — 查看当前对话历史 (可加数字如 `/history 5`)",
             "• `/status` — 查看 Bot 状态",
+            "• `/cost` — 查看 API 花费统计",
             "• `/help` — 显示此帮助",
             "",
             "**使用方式**",
             "• 直接发消息与 Claude 对话",
             "• Claude 正在执行时发新消息会自动排队",
             "• 会话上下文自动保留，`/switch` 切换对话继续聊",
+        ]
+        await self.feishu.reply_message(
+            msg_id,
+            FeishuClient.build_card("\n".join(lines))
+        )
+
+    async def _cmd_cost(self, msg_id: str) -> None:
+        """显示 API 花费统计。"""
+        query = cost_tracker.query()
+        count = cost_tracker.count()
+
+        if count == 0:
+            await self.feishu.reply_message(
+                msg_id,
+                FeishuClient.build_card("💰 暂无花费记录\n\n下一次 Claude 调用结束后就会开始统计。")
+            )
+            return
+
+        lines = [
+            "💰 **API 花费统计**",
+            "",
+            f"• 今日: **${query['today']:.4f}**",
+            f"• 本月: **${query['month']:.4f}**",
+            f"• 总计: **${query['total']:.4f}**（{count} 次）",
         ]
         await self.feishu.reply_message(
             msg_id,
@@ -372,6 +398,7 @@ class Bot:
             "/start": self._cmd_start,
             "/status": self._cmd_status,
             "/stat": self._cmd_status,
+            "/cost": self._cmd_cost,
             "/help": self._cmd_help,
             "/h": self._cmd_help,
             "/?": self._cmd_help,
@@ -610,6 +637,9 @@ class Bot:
                 return
             elif stripped == "/status":
                 await self._cmd_status(msg_id)
+                return
+            elif stripped == "/cost":
+                await self._cmd_cost(msg_id)
                 return
             elif stripped == "/help" or stripped == "/h":
                 await self._cmd_help(msg_id)

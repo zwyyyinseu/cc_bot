@@ -18,6 +18,7 @@ from feishu_client import FeishuClient
 from claude_runner import run_claude
 from conversations import conv_store
 from history_store import history_store
+from cost_tracker import cost_tracker
 import logging
 log = logging.getLogger(__name__)
 
@@ -268,8 +269,12 @@ async def run_claude_and_stream(
                 await _throttled_update(current_msg_id[0], summary, force=True)
             elif not text_started[0]:
                 await _throttled_update(current_msg_id[0], "✅ 任务完成", force=True)
-            # 推送通知：回复新消息触发手机推送（卡片更新不触发推送）
+            # 记录花费
             cost_info = entry.get("cost_usd", "")
+            if cost_info:
+                active = conv_store.active
+                cost_tracker.record(active.id if active else "unknown", float(cost_info))
+            # 推送通知：回复新消息触发手机推送（卡片更新不触发推送）
             cost_str = f" · ${cost_info:.4f}" if cost_info else ""
             await feishu.reply_message(
                 user_message_id,
